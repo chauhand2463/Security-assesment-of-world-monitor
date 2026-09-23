@@ -172,6 +172,23 @@ def _run_stages(db, scan, config, job, progress, snapshot) -> list:
     current_row: ScanStage | None = None
     watermarks: dict[str, int] = {}
 
+    # Phase 10.3: one honest ScanExecution record for this plan execution.
+    from app.execution.scheduler import group_plan, execute_batch
+    from app.execution.scheduler import max_parallel_tools
+    from database.models import ScanExecution
+
+    execution_row = ScanExecution(
+        scan_id=scan.id,
+        strategy="parallel" if max_parallel_tools(config) > 1 else "sequential",
+        max_parallel_tools=max_parallel_tools(config),
+        plan=group_plan(config),
+        planned_tools=sum(len(g.get("tools") or ()) for g in group_plan(config)),
+        status="running",
+        started_at=datetime.datetime.utcnow(),
+    )
+    db.add(execution_row)
+    db.flush()
+
     def _obs_count() -> int:
         return int(db.query(func.max(Observation.id))
                    .filter(Observation.scan_id == scan.id).scalar() or 0)
@@ -202,31 +219,48 @@ def _run_stages(db, scan, config, job, progress, snapshot) -> list:
         stages.append(row)
         db.commit()
 
-    for task in plan_tasks(config):
-        _check_cancel(scan.id)
-        if task.startswith("stage:"):
-            stage_name = task.split(":", 1)[1]
+    try:
+        for group in group_plan(config):
+            _check_cancel(scan.id)
+            stage_name = group["stage"]
             _advance_stage(stage_name)
             progress["completed_tasks"] = (progress.get("completed_tasks") or 0) + 1
             _persist_progress(db, scan, progress)
             db.commit()
-            continue
 
-        tool = task.split(":", 1)[1]
-        _check_cancel(scan.id)
-        progress["current_tool"] = tool
-        result = executions.execute_tool(db, scan, tool, config, job, state)
-        status = result.get("status") or ""
-        if status in _FAILED_STATES:
-            progress["failed_tasks"] = (progress.get("failed_tasks") or 0) + 1
-        elif _tool_succeeded(status):
-            progress["completed_tasks"] = (progress.get("completed_tasks") or 0) + 1
-            progress["completed_tools"] = (progress.get("completed_tools") or 0) + 1
-        if current_row is not None:
-            current_row.tests_executed = (current_row.tests_executed or 0) + 1
-        progress["last_tool"] = tool
-        _persist_progress(db, scan, progress)
+            # Run the stage's independent tools (bounded, stage-barrier model).
+            results = execute_batch(db, scan, config, job, state, group["tools"])
+            for result in results:
+                tool = result.get("tool") or ""
+                status = result.get("status") or ""
+                progress["current_tool"] = tool
+                if status in _FAILED_STATES:
+                    progress["failed_tasks"] = (progress.get("failed_tasks") or 0) + 1
+                    execution_row.started_tools = (execution_row.started_tools or 0) + 1
+                    execution_row.failed_tools = (execution_row.failed_tools or 0) + 1
+                elif _tool_succeeded(status):
+                    progress["completed_tasks"] = (progress.get("completed_tasks") or 0) + 1
+                    progress["completed_tools"] = (progress.get("completed_tools") or 0) + 1
+                    execution_row.started_tools = (execution_row.started_tools or 0) + 1
+                    execution_row.completed_tools = (execution_row.completed_tools or 0) + 1
+                elif status == "skipped":
+                    execution_row.skipped_tools = (execution_row.skipped_tools or 0) + 1
+                if current_row is not None:
+                    current_row.tests_executed = (current_row.tests_executed or 0) + 1
+                progress["last_tool"] = tool
+                _persist_progress(db, scan, progress)
+                db.commit()
+    except ScanCancelled:
+        execution_row.status = "cancelled"
+        execution_row.finished_at = datetime.datetime.utcnow()
         db.commit()
+        raise
+    except Exception as exc:
+        logger.error(f"stage execution failed for scan {scan.id}: {exc}")
+        execution_row.status = "failed"
+        execution_row.finished_at = datetime.datetime.utcnow()
+        db.commit()
+        raise
 
     if current_row is not None:
         watermark = watermarks.get(current_row.name, 0)
@@ -234,6 +268,13 @@ def _run_stages(db, scan, config, job, progress, snapshot) -> list:
                         tests_executed=current_row.tests_executed or 0,
                         observations=max(_obs_count() - watermark, 0))
         db.commit()
+
+    execution_row.status = "completed"
+    execution_row.finished_at = datetime.datetime.utcnow()
+    if execution_row.started_at is not None:
+        execution_row.duration_ms = int(
+            (execution_row.finished_at - execution_row.started_at).total_seconds() * 1000)
+    db.commit()
 
     _run_deterministic_assessment(db, scan, config, progress)
     return stages
@@ -264,11 +305,16 @@ def _complete_stage(db, scan, row, status: str, *, tests_executed: int = 0,
 # ---------------------------------------------------------------------------
 # deterministic assessment (rules) over persisted observations
 # ---------------------------------------------------------------------------
+def finding_rules_registry_fingerprint() -> str:
+    from app.assess import detection_registry as dr
+    return dr.registry_fingerprint()
+
+
 def _run_deterministic_assessment(db, scan, config, progress):
     from database.models import Vulnerability
 
     observed = _scan_observations(db, scan.id)
-    candidates = finding_rules.evaluate_observations(observed)
+    candidates = finding_rules.evaluate_observations(observed, config=config)
     severity = (config.get("severity") or "all").lower()
     if severity in SEVERITY_THRESHOLD and severity != "all":
         threshold = SEVERITY_THRESHOLD[severity]
@@ -296,7 +342,8 @@ def _run_deterministic_assessment(db, scan, config, progress):
         [{"severity": f.severity or "Info", "state": f.state or "NEW"} for f in findings])
     scan.logs += (
         f"[Assessment] Rule engine applied to {len(observed)} observations "
-        f"produced {len(candidates)} evidence-backed finding(s).\n"
+        f"produced {len(candidates)} evidence-backed finding(s). "
+        f"[detection-registry {finding_rules_registry_fingerprint()}]\n"
     )
     db.commit()
     _persist_progress(db, scan, progress)
@@ -333,6 +380,26 @@ def _run_validation(db, scan, config):
 
     _record_validations(db, scan)
     _link_observations(db, scan)
+    _run_verification(db, scan, config)
+
+
+def _run_verification(db, scan, config):
+    """Phase 10.6: deterministic re-check of every finding over persisted
+    observations only.  Never issues a network request; appends ``verifications``
+    rows and flips each finding's ``verification_state`` accordingly."""
+    from app.assess.verification import run_verification, VERIFICATION_NOT_APPLICABLE
+
+    tally = run_verification(db, scan, config=config)
+    lines = tally["states"]
+    other = lines.get(VERIFICATION_NOT_APPLICABLE, 0)
+    db.commit()
+    scan.logs += (
+        f"[Verification] {tally['checked']} finding(s) re-checked against "
+        f"persisted observations: {lines.get('verified', 0)} verified, "
+        f"{lines.get('failed', 0)} failed, {other} no supporting observation. "
+        f"[detection-registry {tally['registry']}]\n"
+    )
+    db.commit()
 
 
 def _record_validations(db, scan):

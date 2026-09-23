@@ -8,7 +8,27 @@ DATABASE_URL = settings.database_url
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+pg8000://", 1)
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+if "sqlite" in DATABASE_URL:
+    # Phase 10.3 parallel scheduler: multiple worker sessions write to the same
+    # SQLite file concurrently. WAL allows a reader + one writer without
+    # "database is locked"; busy_timeout makes contentious writes wait instead
+    # of failing immediately.
+    from sqlalchemy import event
+
+    def _sqlite_pragmas(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=10000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
+
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+    event.listen(engine, "connect", _sqlite_pragmas)
+else:
+    engine = create_engine(DATABASE_URL, connect_args={})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_db():

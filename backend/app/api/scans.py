@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 import asyncio
@@ -8,6 +8,7 @@ from database.connection import get_db
 from database.models import (
     Scan, Project, Vulnerability, ToolResult, Asset, Observation, AssessmentTest,
     FindingEvidence, ToolReadiness, ToolExecution, ScanStage, MLInference,
+    ScanEvent,
 )
 from app.orchestration import events as phase7_events
 from app.orchestration import state as phase7_state
@@ -43,7 +44,6 @@ class ScanCreate(ScanRequest):
     tools: dict[str, bool] | None = None
     severity: str | None = None
     profile: str | None = None
-    # Phase 5 assessment engine options.
     active_testing: bool | None = None
     assessment_engine: bool | None = None
     auth_identities: dict | list | None = None
@@ -53,14 +53,10 @@ class ScanCreate(ScanRequest):
     jwt_alg_none_accepted: bool | None = None
     installed_tools: list[str] | None = None
     tools_missing: list[str] | None = None
-    # Phase 8: World Monitor deployment reference for this scan.  Either a
-    # registered target id or an explicit, same-host URL configuration.
     world_monitor: dict | None = None
-    # Phase 8.5 product taxonomy + authorization audit.  Callers that omit
-    # ``assessment_type`` keep the legacy behaviour (inferred); callers that set
-    # it explicitly must also acknowledge that they are authorized to assess.
     assessment_type: str | None = None
     authorization_acknowledged: bool | None = None
+    max_parallel_tools: int | None = None
 
 
 def _resolve_assessment_type(db: Session, user: User, payload: ScanCreate) -> str:
@@ -251,6 +247,8 @@ def create_scan(payload: ScanCreate, user: User = Depends(get_current_user), db:
         config["tools_missing"] = list(payload.tools_missing)
     if payload.world_monitor is not None:
         config["world_monitor"] = payload.world_monitor
+    if payload.max_parallel_tools is not None:
+        config["max_parallel_tools"] = payload.max_parallel_tools
     if not config:
         config = None
 
@@ -586,6 +584,7 @@ def get_scan(scan_id: int, user: User = Depends(get_current_user), db: Session =
     observations = db.query(Observation).filter(Observation.scan_id == scan_id).count()
     assessment_tests = _assessment_tests(db, scan_id)
     from app.assess.sih import coverage_by_area
+    from app.orchestration.dimensions import dimension_coverage
 
     return {
         "id": scan.id,
@@ -607,6 +606,7 @@ def get_scan(scan_id: int, user: User = Depends(get_current_user), db: Session =
         "simulation": bool((scan.scan_config or {}).get("simulation", settings.simulation_mode)),
         "vulnerabilities": [_vulnerability_dict(db, v) for v in vulnerabilities],
         "observations_count": observations,
+        "dimensions": dimension_coverage(db, scan.id, scan.target or ""),
         "assessment": {
             "coverage": _assessment_coverage(db, scan_id),
             "tests": assessment_tests,
@@ -621,17 +621,48 @@ def get_scan(scan_id: int, user: User = Depends(get_current_user), db: Session =
 
 @router.get("/{scan_id}/observations")
 def get_scan_observations(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Persisted evidence observations for a scan owned by the user."""
+    """Persisted evidence observations for a scan owned by the user.
+
+    Phase 10.4 provenance: each observation carries ``tool_execution_id`` --
+    the exact ``tool_executions`` row that produced it -- plus the execution's
+    real terminal state, duration and parsed-observation count.  NULL provenance
+    is honest: it means the observation came from a path that does not create a
+    ToolExecution row (e.g. Phase 5 engine-native HTTP observations).
+    """
     get_owned_scan(db, user, scan_id)
+    from database.models import ToolExecution
+
     rows = db.query(Observation).filter(Observation.scan_id == scan_id).order_by(Observation.id.asc()).all()
-    return [
-        {"id": o.id, "tool": o.tool_name, "kind": o.kind, "subject": o.subject,
-         "data": o.data_json or {}, "raw": o.raw_output or "", "created_at": o.created_at,
-         "observation_type": o.observation_type or o.kind, "source": o.source,
-         "status": o.status, "fingerprint": o.fingerprint, "asset_id": o.asset_id,
-         "request": o.request_json, "response": o.response_json}
-        for o in rows
-    ]
+    ex_ids = {o.tool_execution_id for o in rows if o.tool_execution_id}
+    executions = {}
+    if ex_ids:
+        for ex in db.query(ToolExecution).filter(ToolExecution.id.in_(ex_ids)).all():
+            executions[ex.id] = ex
+    out = []
+    for o in rows:
+        ex = executions.get(o.tool_execution_id) if o.tool_execution_id else None
+        out.append({
+            "id": o.id, "tool": o.tool_name, "kind": o.kind, "subject": o.subject,
+            "data": o.data_json or {}, "raw": o.raw_output or "", "created_at": o.created_at,
+            "observation_type": o.observation_type or o.kind, "source": o.source,
+            "status": o.status, "fingerprint": o.fingerprint, "asset_id": o.asset_id,
+            "request": o.request_json, "response": o.response_json,
+            "tool_execution_id": o.tool_execution_id,
+            "provenance": None if ex is None else {
+                "execution_id": ex.id,
+                "tool": ex.tool,
+                "stage": ex.stage,
+                "attempt": ex.attempt,
+                "status": ex.status,
+                "duration_ms": ex.duration_ms,
+                "parsed_observations": ex.parsed_observations or 0,
+                "started_at": ex.started_at.isoformat() if ex.started_at else None,
+                "finished_at": ex.finished_at.isoformat() if ex.finished_at else None,
+                "exit_code": ex.exit_code,
+                "termination_reason": ex.termination_reason,
+            },
+        })
+    return out
 
 
 @router.get("/{scan_id}/assets")
@@ -676,9 +707,15 @@ def get_scan_findings(scan_id: int, user: User = Depends(get_current_user), db: 
 
 @router.get("/{scan_id}/coverage")
 def get_scan_coverage(scan_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Coverage for one scan: planned vs completed tasks, honest percentages."""
+    """Coverage for one scan: planned vs completed tasks, honest percentages.
+
+    Phase 10.11 adds ``dimensions``: the distinct hosts / ports / URLs actually
+    observed from real persisted rows (never guessed), grouped by tool.
+    """
     scan = get_owned_scan(db, user, scan_id)
     progress = scan.progress or {}
+    from app.orchestration.dimensions import dimension_coverage
+
     return {
         "scan_id": scan.id,
         "target": scan.target,
@@ -692,6 +729,7 @@ def get_scan_coverage(scan_id: int, user: User = Depends(get_current_user), db: 
         "planned_tasks": progress.get("planned_tasks", []),
         "security_score": scan.security_score,
         "assessment": _assessment_coverage(db, scan.id),
+        "dimensions": dimension_coverage(db, scan.id, scan.target or ""),
     }
 
 
@@ -723,18 +761,32 @@ async def stream_scan_events(
     scan_id: int,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    last_event_id: str | None = Header(None, alias="Last-Event-ID"),
 ):
     """SSE endpoint streaming real, persisted scan lifecycle events.
 
-    Events are derived from the persisted ``Scan`` row + child rows and only
-    emitted when they actually change: stage transitions, tool completions,
-    progress/coverage updates, findings, terminal resolution.  Never invented.
+    Phase 10.8 (G5): the stream is a typed cursor over the ``scan_events``
+    ledger.  Every event carries an ``id:`` line equal to the ``ScanEvent`` row
+    id; a reconnecting client sends ``Last-Event-ID`` to resume exactly where it
+    stopped (no re-delivery, no gaps).  For legacy/backfilled scans that predate
+    the event ledger the endpoint falls back to the original diff-based
+    synthesis, so the wire vocabulary is unchanged.
     """
     get_owned_scan(db, user, scan_id)
+    start_cursor = 0
+    if last_event_id and last_event_id.strip().lstrip("-").isdigit():
+        start_cursor = max(int(last_event_id), 0)
 
     async def event_generator():
-        last = {"stage": None, "tools": set(), "findings": set(), "progress": None,
-                "completed_at": None}
+        if db.query(ScanEvent).filter(ScanEvent.scan_id == scan_id).first() is None:
+            # Legacy/backfilled scan: no typed ledger exists.  Keep the original
+            # poll-and-diff behaviour (default wire unchanged).
+            async for out in _legacy_diff_stream(scan_id):
+                yield out
+            return
+
+        cursor = start_cursor
+        sent_done = False
         while True:
             local_db = next(get_db())
             try:
@@ -743,47 +795,187 @@ async def stream_scan_events(
                     yield f"data: {json.dumps({'type': 'error', 'error': 'Scan ID not found'})}\n\n"
                     break
 
-                tools = local_db.query(ToolResult).filter(ToolResult.scan_id == scan_id).all()
-                findings = local_db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
+                page = (
+                    local_db.query(ScanEvent)
+                    .filter(ScanEvent.scan_id == scan_id, ScanEvent.id > cursor)
+                    .order_by(ScanEvent.id.asc())
+                    .limit(200)
+                    .all()
+                )
+                if not page:
+                    if lifecycle.is_terminal(scan.stage or ""):
+                        if not sent_done:
+                            yield f"id: {cursor}\ndata: {json.dumps(_done_event(scan))}\n\n"
+                        break
+                    await asyncio.sleep(0.5)
+                    continue
 
-                if (scan.stage or lifecycle.QUEUED) != last["stage"]:
-                    last["stage"] = scan.stage or lifecycle.QUEUED
-                    yield f"data: {json.dumps({'type': 'stage', 'stage': last['stage'], 'status': scan.status, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
-
-                tool_ids = {tr.id for tr in tools}
-                for tr in tools:
-                    if tr.id not in last["tools"]:
-                        last["tools"].add(tr.id)
-                        yield f"data: {json.dumps({'type': 'tool', 'tool': tr.tool_name, 'status': tr.status, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
-
-                finding_ids = {f.id for f in findings}
-                for f in findings:
-                    if f.id not in last["findings"]:
-                        last["findings"].add(f.id)
-                        yield f"data: {json.dumps({'type': 'finding', 'id': f.id, 'title': f.title, 'severity': f.severity, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
-
-                progress = (scan.progress or {}).get("percent")
-                if progress != last["progress"]:
-                    last["progress"] = progress
-                    yield f"data: {json.dumps({'type': 'progress', 'percent': progress, 'coverage': scan.coverage, 'security_score': scan.security_score, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
-
-                if scan.completed_at and scan.completed_at != last["completed_at"]:
-                    last["completed_at"] = scan.completed_at
-                    yield f"data: {json.dumps({'type': 'done', 'status': scan.status, 'stage': scan.stage or lifecycle.QUEUED, 'coverage': scan.coverage, 'security_score': scan.security_score})}\n\n"
+                for ev in page:
+                    cursor = ev.id
+                    wire = _scan_event_to_wire(ev, scan)
+                    if wire is None:
+                        # Internal ledger row (state/preflight/validation/…):
+                        # advance the cursor without re-emitting it on this wire.
+                        continue
+                    yield f"id: {ev.id}\n"
+                    yield f"data: {json.dumps(wire)}\n\n"
+                    if wire["type"] == "done":
+                        sent_done = True
+                        break
+                if sent_done:
                     break
-
-                if lifecycle.is_terminal(scan.stage or ""):
-                    yield f"data: {json.dumps({'type': 'done', 'status': scan.status, 'stage': scan.stage, 'coverage': scan.coverage, 'security_score': scan.security_score})}\n\n"
-                    break
-
-                await asyncio.sleep(0.5)
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
                 break
             finally:
                 local_db.close()
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _scan_event_to_wire(ev: ScanEvent, scan: Scan) -> dict:
+    """Map one ledger row onto the stable SSE wire vocabulary.
+
+    Only the events the live dashboard consumes (stage/tool/progress/finding/
+    done/error) are shaped here; finer-grained phases 8/9 events remain on the
+    ``/typed-events`` stream and are not re-emitted, keeping this endpoint's
+    contract unchanged.
+    """
+    d = ev.data or {}
+    t = ev.event_type
+    now = datetime.datetime.utcnow().isoformat()
+    if t == phase7_events.EVENT_STAGE:
+        return {"type": "stage", "stage": d.get("stage"), "status": d.get("status"),
+                "timestamp": now}
+    if t == phase7_events.EVENT_TOOL:
+        return {"type": "tool", "tool": d.get("tool"), "status": d.get("status"),
+                "timestamp": now}
+    if t in (phase7_events.EVENT_PROGRESS, phase7_events.EVENT_COVERAGE):
+        percent = d.get("percent")
+        if percent is None:
+            percent = d.get("coverage_percent")
+        return {"type": "progress", "percent": percent,
+                "coverage": scan.coverage, "security_score": scan.security_score,
+                "timestamp": now}
+    if t in (phase7_events.EVENT_FINDING,
+             phase7_events.EVENT_FINDING_CANDIDATE,
+             phase7_events.EVENT_FINDING_VERIFIED,
+             phase7_events.EVENT_FINDING_REJECTED):
+        return {"type": "finding", "id": d.get("id"), "title": d.get("title"),
+                "severity": d.get("severity"), "timestamp": now}
+    if t == phase7_events.EVENT_DONE:
+        return _done_event(scan)
+    if t == phase7_events.EVENT_ERROR:
+        return {"type": "error", "error": d.get("reason") or "scan error",
+                "timestamp": now}
+    # Everything else (state, preflight, validation, asset.discovered,
+    # observation.created) stays internal to the typed ledger: the cursor
+    # advances past it but nothing is emitted on this legacy wire.
+    return None
+
+
+def _done_event(scan: Scan) -> dict:
+    return {"type": "done", "status": scan.status, "stage": scan.stage or lifecycle.QUEUED,
+            "coverage": scan.coverage, "security_score": scan.security_score}
+
+
+async def _legacy_diff_stream(scan_id: int):
+    """Original diff-based SSE stream for scans without an event ledger."""
+    last = {"stage": None, "tools": set(), "findings": set(), "progress": None,
+            "completed_at": None}
+    while True:
+        local_db = next(get_db())
+        try:
+            scan = local_db.query(Scan).filter(Scan.id == scan_id).first()
+            if not scan:
+                yield f"data: {json.dumps({'type': 'error', 'error': 'Scan ID not found'})}\n\n"
+                break
+
+            tools = local_db.query(ToolResult).filter(ToolResult.scan_id == scan_id).all()
+            findings = local_db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
+
+            if (scan.stage or lifecycle.QUEUED) != last["stage"]:
+                last["stage"] = scan.stage or lifecycle.QUEUED
+                yield f"data: {json.dumps({'type': 'stage', 'stage': last['stage'], 'status': scan.status, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
+
+            for tr in tools:
+                if tr.id not in last["tools"]:
+                    last["tools"].add(tr.id)
+                    yield f"data: {json.dumps({'type': 'tool', 'tool': tr.tool_name, 'status': tr.status, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
+
+            for f in findings:
+                if f.id not in last["findings"]:
+                    last["findings"].add(f.id)
+                    yield f"data: {json.dumps({'type': 'finding', 'id': f.id, 'title': f.title, 'severity': f.severity, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
+
+            progress = (scan.progress or {}).get("percent")
+            if progress != last["progress"]:
+                last["progress"] = progress
+                yield f"data: {json.dumps({'type': 'progress', 'percent': progress, 'coverage': scan.coverage, 'security_score': scan.security_score, 'timestamp': datetime.datetime.utcnow().isoformat()})}\n\n"
+
+            if scan.completed_at and scan.completed_at != last["completed_at"]:
+                last["completed_at"] = scan.completed_at
+                yield f"data: {json.dumps({'type': 'done', 'status': scan.status, 'stage': scan.stage or lifecycle.QUEUED, 'coverage': scan.coverage, 'security_score': scan.security_score})}\n\n"
+                break
+
+            if lifecycle.is_terminal(scan.stage or ""):
+                yield f"data: {json.dumps({'type': 'done', 'status': scan.status, 'stage': scan.stage, 'coverage': scan.coverage, 'security_score': scan.security_score})}\n\n"
+                break
+
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            break
+        finally:
+            local_db.close()
+
+
+@router.get("/{scan_id}/execution-plan")
+def get_scan_execution_plan(scan_id: int, user: User = Depends(get_current_user),
+                            db: Session = Depends(get_db)):
+    """Phase 10.3 execution plan: how this scan's plan was really run.
+
+    Returns the ordered plan that was executed (stages + tools), the scheduling
+    decision (sequential/parallel + the bounded concurrency that was applied),
+    and the honest per-state counters from tool results.  Never fabricated: a
+    counter only reflects tool outcomes the pipeline actually observed.
+    """
+    scan = get_owned_scan(db, user, scan_id)
+
+    from database.models import ScanExecution
+    row = (db.query(ScanExecution)
+           .filter(ScanExecution.scan_id == scan.id)
+           .order_by(ScanExecution.id.desc())
+           .first())
+    from app.execution.scheduler import group_plan, max_parallel_tools
+    plan = (row.plan if row is not None and row.plan is not None
+            else group_plan(scan.scan_config or {}))
+    return {
+        "scan_id": scan.id,
+        "exists": row is not None,
+        "strategy": row.strategy if row is not None else "sequential",
+        "max_parallel_tools": (row.max_parallel_tools if row is not None
+                               else max_parallel_tools(scan.scan_config or {})),
+        "status": row.status if row is not None else "pending",
+        "planned_tools": row.planned_tools if row is not None
+        else sum(len(g.get("tools") or ()) for g in plan),
+        "started_tools": row.started_tools if row is not None else 0,
+        "completed_tools": row.completed_tools if row is not None else 0,
+        "failed_tools": row.failed_tools if row is not None else 0,
+        "skipped_tools": row.skipped_tools if row is not None else 0,
+        "started_at": row.started_at.isoformat() if row and row.started_at else None,
+        "finished_at": row.finished_at.isoformat() if row and row.finished_at else None,
+        "duration_ms": row.duration_ms if row is not None else None,
+        "plan": plan,
+    }
 
 
 @router.get("/{scan_id}/assessment")

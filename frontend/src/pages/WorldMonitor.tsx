@@ -209,7 +209,31 @@ export const WorldMonitor: React.FC = () => {
                     {t.discovered_version && <span>version: {t.discovered_version}</span>}
                     {t.last_checked_at && <span>checked: {formatDateTime(t.last_checked_at)}</span>}
                     {t.api_endpoints_total > 0 && <span>{t.api_endpoints_total} endpoints</span>}
+                    {t.staleness && (
+                      <span
+                        className={`mono-cell rounded-full border px-2 py-0.5 text-[9.5px] ${
+                          t.staleness.state === 'fresh'
+                            ? 'border-accent/40 text-accent bg-accent/5'
+                            : t.staleness.state === 'stale'
+                            ? 'border-warn/40 text-medium bg-warn/5'
+                            : 'border-line text-faint'
+                        }`}
+                      >
+                        {String(t.staleness.state || 'never_checked').replace('_', ' ')}
+                      </span>
+                    )}
+                    {Array.isArray(t.bridged_scans) && t.bridged_scans.length > 0 && (
+                      <span className="mono-cell text-[9.5px] text-accent">
+                        bridged to scan(s): {t.bridged_scans.map((s: number) => `#${s}`).join(', ')}
+                      </span>
+                    )}
                   </div>
+                  {t.staleness && t.staleness.state === 'stale' && (
+                    <p className="mono-cell text-[9.5px] text-medium mt-1">
+                      last health check {t.staleness.seconds_since_last_check != null ? `${t.staleness.seconds_since_last_check}s` : '—'} ago
+                      {t.staleness.threshold_seconds ? ` · stale after ${t.staleness.threshold_seconds}s` : ''} — re-probe only on demand
+                    </p>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <button

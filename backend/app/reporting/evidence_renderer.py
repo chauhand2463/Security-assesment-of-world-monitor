@@ -23,6 +23,7 @@ def render_evidence(db, finding) -> list[dict[str, Any]]:
     out = []
     for e in rows:
         integrity = verify_evidence_integrity(e)
+        provenance = _observation_provenance(db, e.observation_id)
         out.append({
             "evidence_id": e.id,
             "finding_id": finding.id,
@@ -38,8 +39,47 @@ def render_evidence(db, finding) -> list[dict[str, Any]]:
             "captured_size": e.captured_size,
             "truncated": e.truncated,
             "integrity": integrity,
+            "provenance": provenance,
         })
     return out
+
+
+def _observation_provenance(db, observation_id: int | None) -> dict | None:
+    """Phase 10.4: the real tool-execution that produced the evidence observation.
+
+    NULL provenance is honest: the observation has no ToolExecution row (e.g.
+    Phase 5 engine-native HTTP evidence), which means lineage is simply absent,
+    never invented.
+    """
+    if not observation_id:
+        return None
+    from database.models import Observation, ToolExecution
+
+    obs = db.query(Observation).filter(Observation.id == observation_id).first()
+    if obs is None:
+        return None
+    ex = None
+    if obs.tool_execution_id:
+        ex = db.query(ToolExecution).filter(ToolExecution.id == obs.tool_execution_id).first()
+    if ex is None:
+        return {
+            "execution_id": None,
+            "tool": obs.tool_name,
+            "status": obs.status or "observed",
+        }
+    return {
+        "execution_id": ex.id,
+        "tool": ex.tool,
+        "stage": ex.stage,
+        "attempt": ex.attempt,
+        "status": ex.status,
+        "duration_ms": ex.duration_ms,
+        "parsed_observations": ex.parsed_observations or 0,
+        "started_at": ex.started_at.isoformat() if ex.started_at else None,
+        "finished_at": ex.finished_at.isoformat() if ex.finished_at else None,
+        "exit_code": ex.exit_code,
+        "termination_reason": ex.termination_reason,
+    }
 
 
 def evidence_block_markdown(db, finding) -> list[str]:

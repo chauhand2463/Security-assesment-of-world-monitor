@@ -22,6 +22,10 @@ ADMIN_EMAIL    Bootstrap admin email. Only used when both ADMIN_EMAIL and
                               configured. Never guessed or defaulted.
    WORLD_MONITOR_API_BASE_URL Optional API base path of the deployment.
    WORLD_MONITOR_OPENAPI_URL  Optional OpenAPI document URL of the deployment.
+   WORLD_MONITOR_STALE_AFTER_SECONDS  Age (seconds) after which a World
+                              Monitor probe result is surfaced as stale in
+                              API payloads. Default: 3600. Staleness is a
+                              surfaced fact, never an auto re-probe.
 """
 import os
 
@@ -96,6 +100,15 @@ class Settings:
         self.world_monitor_openapi_url = (
             os.getenv("WORLD_MONITOR_OPENAPI_URL", "").strip().rstrip("/") or None
         )
+        # How old a World Monitor probe result must be before it is surfaced as
+        # stale in API payloads (seconds).  Staleness is a surfaced fact, never
+        # an automatic decision to re-probe.
+        try:
+            self.world_monitor_stale_after_seconds = int(
+                os.getenv("WORLD_MONITOR_STALE_AFTER_SECONDS", "3600")
+            )
+        except ValueError:
+            self.world_monitor_stale_after_seconds = 3600
 
 
 settings = Settings()

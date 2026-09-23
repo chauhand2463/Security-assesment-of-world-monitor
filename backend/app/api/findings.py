@@ -209,6 +209,25 @@ def list_findings(
     return {"total": total, "limit": limit, "offset": offset, "findings": findings}
 
 
+@router.get("/rules")
+def list_detection_rules(user: User = Depends(get_current_user)):
+    """Phase 10.5 detection registry: the rule corpus findings derive from.
+
+    Returns the deterministic detection rules with their metadata, the
+    observation kinds each consumes, and the stable registry fingerprint that
+    pins the exact corpus a scan's findings were produced from.  Authenticated
+    (read-only) metadata; the per-scan opt-in gates are applied inside the
+    engine via scan config ``detection_rules``.
+    """
+    from app.assess import detection_registry as dr
+
+    return {
+        "fingerprint": dr.registry_fingerprint(),
+        "count": len(dr.default_registry().all()),
+        "rules": dr.default_registry().describe(),
+    }
+
+
 @router.get("/{finding_id}")
 def get_finding(
     finding_id: int,
@@ -219,10 +238,16 @@ def get_finding(
     from app.assess.poc import build_poc
     from app.reporting.finding_renderer import cvss_block, history_entries
     from app.reporting.evidence_renderer import render_evidence
-    from database.models import FindingEvidence
+    from database.models import FindingEvidence, Verification
 
     finding = _get_owned_finding(db, user, finding_id)
 
+    verifications = (
+        db.query(Verification)
+        .filter(Verification.finding_id == finding.id)
+        .order_by(Verification.id.asc())
+        .all()
+    )
     return {
         "id": finding.id,
         "scan_id": finding.scan_id,
@@ -230,6 +255,7 @@ def get_finding(
         "severity": finding.severity,
         "status": finding.status or lifecycle.STATUS_CONFIRMED,
         "state": finding.state or "NEW",
+        "verification_state": finding.verification_state or "unverified",
         "description": finding.description,
         "category": finding.category,
         "rule_id": finding.rule_id,
@@ -249,6 +275,20 @@ def get_finding(
         "proof_of_concept": build_poc(db, finding),
         "evidence": render_evidence(db, finding),
         "history": history_entries(db, finding),
+        "verifications": [
+            {
+                "id": v.id,
+                "method": v.method,
+                "status": v.status,
+                "rule_id": v.rule_id,
+                "condition": v.condition,
+                "reason": v.reason,
+                "observation_ids": v.observation_ids or [],
+                "completed_at": v.completed_at,
+                "created_at": v.created_at,
+            }
+            for v in verifications
+        ],
         "first_seen": finding.first_seen,
         "last_seen": finding.last_seen,
         "resolved_at": finding.resolved_at,

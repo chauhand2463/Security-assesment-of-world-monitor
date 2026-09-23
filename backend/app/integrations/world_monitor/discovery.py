@@ -45,6 +45,8 @@ from app.integrations.world_monitor.models import (
 )
 
 _TIMEOUT_SECONDS = 8.0
+_DEFAULT_MAX_RETRIES = 3
+_DEFAULT_BACKOFF_SECONDS = 0.25
 
 
 class TargetConfig(NamedTuple):
@@ -93,11 +95,17 @@ _HTTP_METHODS = frozenset({
 
 
 def discover(target: TargetConfig, scope_guard: Callable[[str], bool],
-             client: SafeHttpClient | None = None, parse_openapi=None) -> DiscoveryResult:
+             client: SafeHttpClient | None = None, parse_openapi=None,
+             max_retries: int = _DEFAULT_MAX_RETRIES,
+             backoff_seconds: float = _DEFAULT_BACKOFF_SECONDS) -> DiscoveryResult:
     """Run the ordered World Monitor discovery sequence.
 
     ``parse_openapi`` defaults to :func:`_parse_openapi_document`; it is
     injectable so tests can stub document parsing without touching HTTP.
+
+    Phase 10.9: individual probe steps retry transient network failures
+    (``status == 0``) with exponential backoff; scoped-away destinations and
+    real HTTP responses are never retried.
     """
     started = datetime.datetime.utcnow().isoformat()
     base_url = (target.base_url or "").strip().rstrip("/")
@@ -116,7 +124,8 @@ def discover(target: TargetConfig, scope_guard: Callable[[str], bool],
 
     # --- 1. base URL -------------------------------------------------------
     step_order = 0
-    health = check_health(base_url, scope_guard, client)
+    health = check_health(base_url, scope_guard, client,
+                          max_retries=max_retries, backoff_seconds=backoff_seconds)
     result.health = health
     if health.error and "outside authorized scope" in (health.error or ""):
         result.steps.append(DiscoveryStep(step_order, SOURCE_BASE_URL, base_url,
@@ -143,7 +152,8 @@ def discover(target: TargetConfig, scope_guard: Callable[[str], bool],
     if target.api_base_url:
         step_order += 1
         api_base = target.api_base_url.strip().rstrip("/")
-        status, detail = _probe_url(client, scope_guard, api_base)
+        status, detail = _probe_url(client, scope_guard, api_base,
+                                    max_retries=max_retries, backoff_seconds=backoff_seconds)
         result.steps.append(DiscoveryStep(step_order, SOURCE_API_BASE, api_base,
                                           status, detail))
         if status == STEP_REACHABLE:
@@ -153,7 +163,8 @@ def discover(target: TargetConfig, scope_guard: Callable[[str], bool],
     if target.openapi_url:
         step_order += 1
         openapi_url = target.openapi_url.strip().rstrip("/")
-        doc, status, detail = _fetch_document(client, scope_guard, openapi_url)
+        doc, status, detail = _fetch_document(client, scope_guard, openapi_url,
+                                              max_retries=max_retries, backoff_seconds=backoff_seconds)
         if status == STEP_REACHABLE and doc:
             parser = parse_openapi or _parse_openapi_document
             endpoints = parser(doc, source=SOURCE_OPENAPI)
@@ -206,27 +217,32 @@ def discover(target: TargetConfig, scope_guard: Callable[[str], bool],
 
 
 def _probe_url(client: SafeHttpClient, scope_guard: Callable[[str], bool],
-               url: str) -> tuple[str, str]:
+               url: str, max_retries: int = _DEFAULT_MAX_RETRIES,
+               backoff_seconds: float = _DEFAULT_BACKOFF_SECONDS) -> tuple[str, str]:
     if not scope_guard(url):
         return STEP_BLOCKED, "API base URL outside authorized scope (not fetched)"
-    try:
-        resp = client.get(url)
-    except OutOfScopeError as exc:
-        return STEP_BLOCKED, f"redirect left authorized scope: {exc}"
+    resp, attempts, _blocked = _get_with_retries(client, url,
+                                                 max_retries=max_retries, backoff_seconds=backoff_seconds)
+    if _blocked:
+        return STEP_BLOCKED, _blocked
     if resp.status > 0:
-        return STEP_REACHABLE, f"HTTP {resp.status} in {resp.elapsed_ms:.1f} ms"
+        detail = f"HTTP {resp.status} in {resp.elapsed_ms:.1f} ms"
+        if attempts > 1:
+            detail += f" (after {attempts} attempt(s))"
+        return STEP_REACHABLE, detail
     return STEP_UNAVAILABLE, f"HTTP request failed: {resp.error or 'no response'}"
 
 
 def _fetch_document(client: SafeHttpClient, scope_guard: Callable[[str], bool],
-                    url: str) -> tuple[dict | None, str, str]:
+                    url: str, max_retries: int = _DEFAULT_MAX_RETRIES,
+                    backoff_seconds: float = _DEFAULT_BACKOFF_SECONDS) -> tuple[dict | None, str, str]:
     """Fetch and parse a JSON document. Returns (document, status, detail)."""
     if not scope_guard(url):
         return None, STEP_BLOCKED, "OpenAPI URL outside authorized scope (not fetched)"
-    try:
-        resp = client.get(url)
-    except OutOfScopeError as exc:
-        return None, STEP_BLOCKED, f"redirect left authorized scope: {exc}"
+    resp, attempts, _blocked = _get_with_retries(client, url,
+                                                 max_retries=max_retries, backoff_seconds=backoff_seconds)
+    if _blocked:
+        return None, STEP_BLOCKED, _blocked
     if resp.status <= 0:
         return None, STEP_UNAVAILABLE, f"HTTP request failed: {resp.error or 'no response'}"
     if resp.status >= 400:
@@ -235,10 +251,46 @@ def _fetch_document(client: SafeHttpClient, scope_guard: Callable[[str], bool],
         doc = json.loads(resp.body or "{}")
     except (ValueError, TypeError) as exc:
         return None, STEP_UNAVAILABLE, f"body not valid JSON ({exc})"
+    detail = f"HTTP {resp.status}; valid OpenAPI document"
+    if attempts > 1:
+        detail += f" (after {attempts} attempt(s))"
     if isinstance(doc, dict) and "paths" in doc:
-        return doc, STEP_REACHABLE, f"HTTP {resp.status}; valid OpenAPI document"
+        return doc, STEP_REACHABLE, detail
     return doc, STEP_REACHABLE, (f"HTTP {resp.status}; JSON served without a paths map"
                                  if isinstance(doc, dict) else "HTTP {resp.status}; non-object JSON")
+
+
+class _BlockedResponse:
+    """Sentinel for a redirect that left authorized scope (never retried)."""
+
+    status = 0
+    error = ""
+    elapsed_ms = 0.0
+
+
+def _get_with_retries(client: SafeHttpClient, url: str, *,
+                      max_retries: int = _DEFAULT_MAX_RETRIES,
+                      backoff_seconds: float = _DEFAULT_BACKOFF_SECONDS) -> tuple[object, int, str]:
+    """GET ``url`` retrying transient network failures with bounded backoff.
+
+    Returns ``(response, attempts, blocked_reason)``.  A blocked redirect
+    (OutOfScopeError) or a real HTTP response (any status) ends the loop
+    immediately.
+    """
+    import time
+
+    from app.integrations.world_monitor.health import _transient_error
+
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            resp = client.get(url)
+        except OutOfScopeError as exc:
+            return _BlockedResponse(), attempts, f"redirect left authorized scope: {exc}"
+        if not _transient_error(resp) or attempts > max_retries:
+            return resp, attempts, ""
+        time.sleep(backoff_seconds * (2 ** (attempts - 1)))
 
 
 __all__ = [

@@ -65,6 +65,30 @@ def history_entries(db, finding) -> list[dict]:
     ]
 
 
+def _verification_entries(db, finding) -> list[dict]:
+    from database.models import Verification
+
+    rows = (
+        db.query(Verification)
+        .filter(Verification.finding_id == finding.id)
+        .order_by(Verification.id.asc())
+        .all()
+    )
+    return [
+        {
+            "id": v.id,
+            "method": v.method,
+            "status": v.status,
+            "rule_id": v.rule_id,
+            "condition": v.condition,
+            "reason": safe_text(v.reason),
+            "observation_ids": v.observation_ids or [],
+            "completed_at": (v.completed_at.isoformat() + "Z") if v.completed_at else None,
+        }
+        for v in rows
+    ]
+
+
 def render_finding(db, finding) -> dict[str, Any]:
     status = finding.status or lifecycle.STATUS_CONFIRMED
     out = {
@@ -75,6 +99,8 @@ def render_finding(db, finding) -> dict[str, Any]:
         # evidence-backed observation that has not yet been validated.  Nothing
         # from the ML advisory is ever represented as a finding.
         "provenance": "validated" if status == lifecycle.STATUS_CONFIRMED else "observed",
+        # Phase 10.6: deterministic re-check verdict over persisted observations.
+        "verification_state": finding.verification_state or "unverified",
         "severity": finding.severity,
         "title": safe_text(finding.title),
         "description": safe_text(finding.description),
@@ -99,6 +125,7 @@ def render_finding(db, finding) -> dict[str, Any]:
         if isinstance(finding.remediation_details, dict) else {},
         "references": (finding.references_json or []) if isinstance(finding.references_json, list) else [],
         "evidence_ids": [e.id for e in finding.evidence_records],
+        "verifications": _verification_entries(db, finding),
         "history": history_entries(db, finding),
         "first_seen": (finding.first_seen.isoformat() + "Z") if finding.first_seen else None,
         "last_seen": (finding.last_seen.isoformat() + "Z") if finding.last_seen else None,
@@ -131,8 +158,16 @@ def finding_to_markdown(db, finding) -> str:
         f"- evidence record ids: {', '.join(str(i) for i in r['evidence_ids']) or 'none'}",
         f"- fingerprint: `{r['fingerprint'] or 'n/a'}`",
         "",
-        "**History:**",
+        "**Verification (Phase 10.6):**",
+        f"- state: `{r['verification_state']}`",
     ]
+    for v in r["verifications"]:
+        lines.append(
+            f"- `{v['status']}` via `{v['method']}` ({v['rule_id'] or 'n/a'}) "
+            f"over obs {v['observation_ids'] or []}: {v['reason'] or ''}"
+        )
+    lines.append("")
+    lines.append("**History:**")
     for entry in r["history"]:
         lines.append(
             f"- `{entry['from_status']} -> {entry['to_status']}` by `{entry['actor']}` "

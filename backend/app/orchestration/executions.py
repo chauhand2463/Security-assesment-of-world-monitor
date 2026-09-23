@@ -123,7 +123,7 @@ def _finish_execution(db, ex, *, status: str, duration_ms: int,
 
 
 def _persist_adapter_observations(db, scan, tool: str, target: str,
-                                  observations) -> int:
+                                  observations, tool_execution_id: int | None = None) -> int:
     from app.orchestration import events
     from database.models import Observation
 
@@ -136,7 +136,7 @@ def _persist_adapter_observations(db, scan, tool: str, target: str,
             target=target,
             asset=None,
         )
-        row = Observation(**kwargs)
+        row = Observation(tool_execution_id=tool_execution_id, **kwargs)
         db.add(row)
         db.flush()
         events.emit_observation(db, scan.id, row.id, row.kind, row.subject, tool)
@@ -144,22 +144,23 @@ def _persist_adapter_observations(db, scan, tool: str, target: str,
     return count
 
 
-def _persist_legacy_observation(db, scan, *, kind: str, subject: str,
+def _persist_legacy_observation(db, scan, ex, *, kind: str, subject: str,
                                 data: dict, raw: str):
     from app.orchestration import events
     from database.models import Observation
 
     row = Observation(
         scan_id=scan.id,
-        tool_name="nuclei",
+        tool_name=ex.tool,
         kind=kind,
         subject=(subject or scan.target)[:255],
         data_json=data or {},
         raw_output=raw or "",
+        tool_execution_id=ex.id,
     )
     db.add(row)
     db.flush()
-    events.emit_observation(db, scan.id, row.id, row.kind, row.subject, "nuclei")
+    events.emit_observation(db, scan.id, row.id, row.kind, row.subject, row.tool_name)
 
 
 def _extra_options(config: dict, tool: str) -> dict:
@@ -218,7 +219,7 @@ def _run_dns_probe(db, scan, tool, config, job, state, started) -> dict:
         observations.extend(report.get("observations", []))
     duration_ms = int((time.monotonic() - started) * 1000)
     ex = _begin_execution(db, scan, tool, 1)
-    _persist_observations(db, scan, tool, observations)
+    _persist_observations(db, scan, tool, observations, tool_execution_id=ex.id)
     _finish_execution(db, ex, status="completed", duration_ms=duration_ms,
                       parsed_observations=len(observations))
     log = f"[real_dns] {len(observations)} DNS observation(s) recorded for {len(hosts)} host(s)."
@@ -238,7 +239,7 @@ def _run_tcp_probe(db, scan, tool, config, job, state, started) -> dict:
         observations.extend(report.get("observations", []))
     duration_ms = int((time.monotonic() - started) * 1000)
     ex = _begin_execution(db, scan, tool, 1)
-    _persist_observations(db, scan, tool, observations)
+    _persist_observations(db, scan, tool, observations, tool_execution_id=ex.id)
     open_ports = sum(1 for o in observations if o.get("kind") == "tcp_open")
     _finish_execution(db, ex, status="completed", duration_ms=duration_ms,
                       parsed_observations=len(observations))
@@ -259,7 +260,7 @@ def _run_http_probe(db, scan, tool, config, job, state, started) -> dict:
             observations.extend(real_probes.http_probe(f"{scheme}://{host}").get("observations", []))
     duration_ms = int((time.monotonic() - started) * 1000)
     ex = _begin_execution(db, scan, tool, 1)
-    _persist_observations(db, scan, tool, observations)
+    _persist_observations(db, scan, tool, observations, tool_execution_id=ex.id)
     _finish_execution(db, ex, status="completed", duration_ms=duration_ms,
                       parsed_observations=len(observations))
     log = f"[real_http] {len(observations)} HTTP observation(s) recorded."
@@ -272,7 +273,8 @@ def _run_http_probe(db, scan, tool, config, job, state, started) -> dict:
 # ---------------------------------------------------------------------------
 # Phase 8 World Monitor discovery (explicit configuration only)
 # ---------------------------------------------------------------------------
-def _persist_observations(db, scan, tool: str, observations: list):
+def _persist_observations(db, scan, tool: str, observations: list,
+                          tool_execution_id: int | None = None):
     """Persist legacy probe observation dicts (kind/subject/data/raw shape)."""
     from app.orchestration import events
     from database.models import Observation
@@ -285,6 +287,7 @@ def _persist_observations(db, scan, tool: str, observations: list):
             subject=o.get("subject") or scan.target,
             data_json=o.get("data") or {},
             raw_output=clip(o.get("raw") or ""),
+            tool_execution_id=tool_execution_id,
         )
         db.add(row)
         db.flush()
@@ -411,6 +414,7 @@ def _run_world_monitor_discovery(db, scan, tool, config, job, started) -> dict:
                        "reason": "no world_monitor config (target_id or base_url) in scan configuration",
                        "source": "world_monitor"},
             raw_output="[world_monitor_discovery] Skipped: no World Monitor deployment configured for this scan.",
+            tool_execution_id=ex.id,
         ))
         db.flush()
         _save_result(db, scan.id, tool, {
@@ -444,15 +448,15 @@ def _run_world_monitor_discovery(db, scan, tool, config, job, started) -> dict:
         ))
 
     parsed = 0
+    ex = _begin_execution(db, scan, tool, 1)
     for kwargs in observations:
-        row = Observation(**kwargs)
+        row = Observation(tool_execution_id=ex.id, **kwargs)
         db.add(row)
         db.flush()
         events.emit_observation(db, scan.id, row.id, row.kind, row.subject, tool)
         parsed += 1
 
     duration_ms = int((time.monotonic() - started) * 1000)
-    ex = _begin_execution(db, scan, tool, 1)
     _finish_execution(db, ex, status="completed", duration_ms=duration_ms,
                       parsed_observations=parsed,
                       termination_reason=result.error)
@@ -479,12 +483,14 @@ def _run_legacy(db, scan, tool, config, job, started) -> dict:
     status = result.get("status") or ""
     terminal = _legacy_terminal(status)
 
+    ex = _begin_execution(db, scan, tool, 1)
+
     # nuclei real output -> nuclei_finding observations (exactly Phase 3).
     parsed = 0
     if tool == "nuclei" and status == "success":
         for record in result.get("vulnerabilities") or []:
             _persist_legacy_observation(
-                db, scan,
+                db, scan, ex,
                 kind="nuclei_finding",
                 subject=record.get("matched_at") or record.get("proof_of_concept") or target,
                 data={
@@ -502,7 +508,6 @@ def _run_legacy(db, scan, tool, config, job, started) -> dict:
                 raw=record.get("proof_of_concept") or result.get("log") or "")
             parsed += 1
 
-    ex = _begin_execution(db, scan, tool, 1)
     err = result.get("error")
     _finish_execution(
         db, ex,
@@ -570,7 +575,8 @@ def _run_adapter(db, scan, tool, config, job, started) -> dict:
         parsed = 0
         if result.status == scanner_tools.STATE_COMPLETED:
             parsed = _persist_adapter_observations(
-                db, scan, tool, scan.target, result.observations)
+                db, scan, tool, scan.target, result.observations,
+                tool_execution_id=ex.id)
         status = _adapter_terminal(result.status)
         _finish_execution(
             db, ex,

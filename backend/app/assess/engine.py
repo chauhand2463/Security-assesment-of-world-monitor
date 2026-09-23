@@ -320,7 +320,7 @@ def _persist_findings(db, scan, candidates, observation_rows, target) -> tuple[l
 _ADAPTER_TOOLS = ("nmap", "nuclei", "httpx", "ffuf", "nikto", "sqlmap", "testssl")
 
 
-def _persist_external_candidates(db, scan) -> int:
+def _persist_external_candidates(db, scan) -> dict:
     """Surface external-tool vulnerability observations as *candidate* findings.
 
     External adapters run independently of the native engine; their
@@ -348,6 +348,7 @@ def _persist_external_candidates(db, scan) -> int:
     )
 
     created = 0
+    merged = 0
     now = datetime.datetime.utcnow()
     for obs in rows:
         tool = (obs.tool_name or "").lower()
@@ -359,7 +360,32 @@ def _persist_external_candidates(db, scan) -> int:
         severity = str(data.get("severity") or "Info").capitalize()
         if severity not in ("Critical", "High", "Medium", "Low", "Info"):
             severity = "Info"
-        dedup_key = f"external:{tool}:{normalize_endpoint(subject)}:{category}"
+        # Phase 10.7: ONE fingerprint namespace.  External candidates derive
+        # their dedup identity from the same ``finding_fingerprint`` function
+        # native (confirmed) findings use -- so the same issue reported by
+        # nuclei and by the native engine collides instead of living in
+        # disjoint key namespaces.  The tool identity is preserved in
+        # ``source_tool`` (provenance), never in the identity key.
+        from app.http.fingerprints import host_of
+        from app.observations.fingerprint import finding_fingerprint
+
+        host = host_of(subject) or scan.target
+        dedup_key = finding_fingerprint(category, host, normalize_endpoint(subject), None)
+        match = (
+            db.query(Vulnerability)
+            .filter(Vulnerability.scan_id == scan.id,
+                    Vulnerability.fingerprint == dedup_key)
+            .first()
+        )
+        if match is not None:
+            # Cross-tool correlation: the same underlying issue already exists
+            # (native-confirmed or earlier candidate).  Merge the real external
+            # observation as corroborating evidence instead of duplicating or
+            # dropping it; the existing finding's status/history is preserved.
+            _merge_external_observation(db, scan, match, obs, tool)
+            existing.add(dedup_key)
+            merged += 1
+            continue
         if dedup_key in existing:
             continue
         description = (
@@ -393,7 +419,44 @@ def _persist_external_candidates(db, scan) -> int:
         existing.add(dedup_key)
         lifecycle.record_initial(db, row, reason=f"candidate from external tool {tool}")
         created += 1
-    return created
+    return {"created": created, "merged": merged}
+
+
+def _merge_external_observation(db, scan, finding, obs, tool: str) -> None:
+    """Corroborate an existing finding with a real external observation.
+
+    Phase 10.7 cross-tool correlation: when an external adapter (e.g. nuclei)
+    reports the same issue that a native-confirmed finding (or an earlier
+    candidate) already represents, we attach the observation as evidence and
+    list the tool as a corroborating source.  The finding's lifecycle status,
+    history and verdict are NEVER rewritten.
+    """
+    from app.assess import finding_lifecycle as lifecycle
+    from app.assess import profile
+    from app.assess.evidence import summary as evidence_summary
+    from database.models import FindingEvidence, FindingObservationLink
+
+    now = datetime.datetime.utcnow()
+    obs_ids = list(finding.evidence_observation_ids or [])
+    if obs.id not in obs_ids:
+        obs_ids.append(obs.id)
+        finding.evidence_observation_ids = obs_ids
+    existing_link = (
+        db.query(FindingObservationLink)
+        .filter(FindingObservationLink.finding_id == finding.id,
+                FindingObservationLink.observation_id == obs.id)
+        .first()
+    )
+    if existing_link is None:
+        db.add(FindingObservationLink(finding_id=finding.id, observation_id=obs.id))
+    # Record the corroborating tool without changing the existing identity.
+    sources = [s.strip() for s in (finding.source_tool or "").split(",") if s.strip()]
+    if tool not in sources:
+        sources.append(tool)
+        finding.source_tool = ", ".join(sources)
+    finding.last_seen = now
+    finding.occurrence_count = (finding.occurrence_count or 1) + 1
+    db.flush()
 
 
 def _persist_evidence(db, finding, candidate, index) -> None:

@@ -64,7 +64,7 @@ def _merge_config(requested: dict | None, stored: dict | None) -> dict:
         base["assessment_engine"] = bool(req.get("assessment_engine"))
     for key in ("auth_identities", "ssrf_validation_url", "ssrf_token", "jwt_tokens",
                 "jwt_alg_none_accepted", "installed_tools", "tools_missing",
-                "world_monitor"):
+                "world_monitor", "max_parallel_tools"):
         if key in req:
             base[key] = req[key]
     return base
@@ -78,26 +78,50 @@ def _enabled_tools(config: dict) -> dict:
 # Stage / progress persistence helpers
 # ---------------------------------------------------------------------------
 def _set_stage(db, scan: Scan, stage: str, log_line: str):
-    """Transition the job stage, derive coarse status, and append a log line."""
+    """Transition the job stage, derive coarse status, and append a log line.
+
+    Emits a real ``stage`` scan event (Phase 10.8) so the legacy orchestrator is
+    ledger-backed like the Phase 7 pipeline: the live SSE stream is a typed
+    cursor over ``scan_events`` and a reconnecting client can resume stage
+    transitions instead of re-deriving them from a snapshot.
+    """
     scan.stage = stage
     if not lifecycle.is_terminal(stage):
         scan.status = lifecycle.coarse_status(stage)
     scan.updated_at = datetime.datetime.utcnow()
     scan.logs = (scan.logs or "") + log_line + "\n"
+    from app.orchestration import events as phase7_events
+    phase7_events.emit_stage(db, scan.id, stage, "started")
     db.commit()
 
 
 def _persist_progress(db, scan: Scan, progress: dict):
-    """Persist structured progress + the derived coverage metric."""
+    """Persist structured progress + the derived coverage metric.
+
+    Emits a real ``progress`` scan event (Phase 10.8) whenever the percentage
+    actually changes, so the live SSE stream stays ledger-backed: a reconnecting
+    client can resume progress updates from the persisted event stream instead
+    of re-deriving them from the current snapshot.
+    """
     progress["percent"] = 0
     total = progress.get("total_tasks") or 0
     completed = progress.get("completed_tasks") or 0
     if total > 0:
         progress["percent"] = round(100.0 * min(completed, total) / total, 1)
+    prev_percent = (scan.progress or {}).get("percent")
     scan.progress = progress
     scan.coverage = lifecycle.compute_coverage(progress)
     scan.updated_at = datetime.datetime.utcnow()
     db.commit()
+    if progress["percent"] != prev_percent and scan.id and total > 0:
+        from app.orchestration import events as phase7_events
+        phase7_events.emit(db, scan.id, phase7_events.EVENT_PROGRESS, {
+            "percent": progress["percent"],
+            "coverage": scan.coverage,
+            "completed": progress.get("completed_tasks") or 0,
+            "total": progress.get("total_tasks") or 0,
+        })
+        db.commit()
 
 
 def _check_cancel(scan_id: int):
@@ -256,7 +280,7 @@ def orchestrate_scan(scan_id: int, simulation: bool = True, config: dict | None 
             db.commit()
         else:
             observations = _scan_observations(db, scan.id)
-            candidates = finding_rules.evaluate_observations(observations)
+            candidates = finding_rules.evaluate_observations(observations, config=config)
             if severity_filter and severity_filter in SEVERITY_THRESHOLD and severity_filter != "all":
                 threshold = SEVERITY_THRESHOLD[severity_filter]
                 candidates = [
@@ -400,21 +424,32 @@ def _run_tool(db, scan: Scan, tool_name: str, enabled: dict, simulation: bool,
 
     Returns an honest empty result shape when the tool is disabled by config.
     """
+    from app.orchestration import events as phase7_events
+
     if not enabled.get(tool_name):
         fake = {"tool": tool_name, "status": "skipped", "log": f"[{tool_name}] DISABLED by scan configuration."}
+        phase7_events.emit_tool(db, scan.id, tool_name, "skipped", attempt=1)
+        db.commit()
         return fake
 
     _check_cancel(scan.id)
     scan.logs += f"[{tool_name}] executing...\n"
+    phase7_events.emit_tool(db, scan.id, tool_name, "started", attempt=1)
     db.commit()
     result = runner()
     status = result.get("status") or ""
     save_tool_result(db, scan.id, tool_name, result, simulated=simulation)
-    if status == "success":
-        progress["completed_tasks"] = (progress.get("completed_tasks") or 0) + 1
-        progress["completed_tools"] = (progress.get("completed_tools") or 0) + 1
-    elif status in (STATE_EXECUTION_FAILED, STATE_TIMEOUT, STATE_PARSE_FAILED):
+    if status in (STATE_EXECUTION_FAILED, STATE_TIMEOUT, STATE_PARSE_FAILED):
+        event_status = "failed"
         progress["failed_tasks"] = (progress.get("failed_tasks") or 0) + 1
+    elif status == "skipped":
+        event_status = "skipped"
+    else:
+        if status == "success":
+            progress["completed_tasks"] = (progress.get("completed_tasks") or 0) + 1
+            progress["completed_tools"] = (progress.get("completed_tools") or 0) + 1
+        event_status = "completed"
+    phase7_events.emit_tool(db, scan.id, tool_name, event_status, attempt=1)
     progress["last_tool"] = tool_name
     _persist_progress(db, scan, progress)
     _check_cancel(scan.id)

@@ -11,7 +11,17 @@ persisted by the caller.
 """
 from __future__ import annotations
 
+import threading
+
 from database.models import ScanEvent
+
+# Per-scan in-memory seq counters are necessary under parallelism: with
+# multiple worker threads emitting events (Phase 10.3), MAX(seq)+1 computed
+# from the database races -- two workers could claim the same seq before
+# either commits.  A module-level lock serializes allocation per scan, seeded
+# lazily from the highest committed seq so replays stay monotonic and unique.
+_seq_counters: dict[int, int] = {}
+_seq_lock = threading.Lock()
 
 EVENT_STATE = "state"
 EVENT_STAGE = "stage"
@@ -40,14 +50,20 @@ KNOWN_EVENT_TYPES = frozenset({
 
 
 def next_seq(db, scan_id: int) -> int:
-    from sqlalchemy import func
+    with _seq_lock:
+        nxt = _seq_counters.get(scan_id)
+        if nxt is None:
+            from sqlalchemy import func
 
-    current = (
-        db.query(func.max(ScanEvent.seq))
-        .filter(ScanEvent.scan_id == scan_id)
-        .scalar()
-    )
-    return int(current or 0) + 1
+            current = (
+                db.query(func.max(ScanEvent.seq))
+                .filter(ScanEvent.scan_id == scan_id)
+                .scalar()
+            )
+            nxt = int(current or 0)
+        nxt += 1
+        _seq_counters[scan_id] = nxt
+        return nxt
 
 
 def emit(db, scan_id: int, event_type: str, data: dict | None = None) -> int:

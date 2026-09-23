@@ -205,26 +205,22 @@ def _nuclei_candidate(obs: dict) -> Optional[dict]:
     }
 
 
-def evaluate_observations(observations: list[dict]) -> list[dict]:
-    """Run every rule over the given observation dicts. Pure and deterministic."""
+def evaluate_observations(observations: list[dict],
+                          config: Optional[dict] = None) -> list[dict]:
+    """Run every enabled rule over the given observation dicts.
+
+    Pure and deterministic.  Phase 10.5: the applied rule set comes from the
+    detection registry honoured by ``config["detection_rules"]`` per-rule gates;
+    when no gates exist every registered rule runs, exactly as before.
+    """
+    from app.assess import detection_registry as dr
+
+    registry = dr.default_registry()
+    enabled = registry.enabled(config)
     candidates: list[dict] = []
     for obs in observations:
-        kind = (obs.get("kind") or "").strip()
-        if kind == "http_response":
-            for header in _MISSING_HEADER_META:
-                candidate = _missing_headers_candidate(obs, header)
-                if candidate:
-                    candidates.append(candidate)
-            version_candidate = _server_version_candidate(obs)
-            if version_candidate:
-                candidates.append(version_candidate)
-        elif kind == "body_match":
-            candidate = _jquery_candidate(obs)
-            if candidate:
-                candidates.append(candidate)
-        elif kind == "nuclei_finding":
-            candidate = _nuclei_candidate(obs)
-            if candidate:
+        for rule in enabled:
+            for candidate in rule.produce(obs):
                 candidates.append(candidate)
     return candidates
 

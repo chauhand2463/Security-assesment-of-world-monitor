@@ -126,6 +126,59 @@ def _endpoint_dict(e: WorldMonitorAPIEndpoint) -> dict:
     }
 
 
+def _staleness(target: WorldMonitorTarget, db: Session) -> dict:
+    """Surface probe-result age honestly (Phase 10.9).
+
+    Staleness is a reported fact computed from the last persisted probe times
+    versus a configurable threshold; it never triggers automatic re-probing.
+    ``never_checked`` is the honest state for a target with no probe history.
+    """
+    from app.config import settings
+
+    threshold = settings.world_monitor_stale_after_seconds or 3600
+    now = datetime.datetime.utcnow()
+    last_checked = target.last_checked_at
+    last_discovery = target.last_discovery_at
+    since_check = None
+    since_discovery = None
+    if last_checked is not None:
+        since_check = max(0, int((now - last_checked).total_seconds()))
+    if last_discovery is not None:
+        since_discovery = max(0, int((now - last_discovery).total_seconds()))
+    if last_checked is None:
+        state = "never_checked"
+    else:
+        state = "stale" if since_check > threshold else "fresh"
+    return {
+        "state": state,
+        "threshold_seconds": threshold,
+        "seconds_since_last_check": since_check,
+        "seconds_since_last_discovery": since_discovery,
+    }
+
+
+def _bridged_scan_ids(target: WorldMonitorTarget, db: Session) -> list[int]:
+    """Scans that explicitly bridge to this target (Phase 10.9).
+
+    The scan -> target bridge stays explicit and visible: any Scan whose
+    ``scan_config`` carries ``world_monitor.target_id`` equal to this target is
+    reported here.  Nothing is inferred from target name or URL heuristics.
+    """
+    from database.models import Scan
+
+    rows = (
+        db.query(Scan.id, Scan.scan_config)
+        .filter(Scan.project_id == target.project_id)
+        .all()
+    )
+    out = []
+    for scan_id, config in rows:
+        wm = (config or {}).get("world_monitor") if isinstance(config, dict) else None
+        if isinstance(wm, dict) and wm.get("target_id") == target.id:
+            out.append(scan_id)
+    return sorted(out)
+
+
 def _target_dict(target: WorldMonitorTarget, db: Session, include_inventory: bool = False) -> dict:
     payload = {
         "id": target.id,
@@ -142,6 +195,8 @@ def _target_dict(target: WorldMonitorTarget, db: Session, include_inventory: boo
         "error": target.error,
         "created_at": target.created_at,
         "updated_at": target.updated_at,
+        "staleness": _staleness(target, db),
+        "bridged_scans": _bridged_scan_ids(target, db),
         "api_endpoints_total": (
             db.query(WorldMonitorAPIEndpoint).filter(WorldMonitorAPIEndpoint.target_id == target.id).count()
         ),

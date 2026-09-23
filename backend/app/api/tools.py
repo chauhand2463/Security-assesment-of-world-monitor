@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from app.core.auth import get_current_user
-from app.tools.inventory import tool_inventory
+from app.tools.inventory import tool_inventory, tool_health_summary
+from app.tools.manifest import build_manifests
 from app.config import settings
 from database.models import User
 
@@ -13,12 +14,31 @@ def get_tool_inventory(user: User = Depends(get_current_user)):
 
     Reporting is honest: every entry reflects an actual ``shutil.which``
     probe on the host, never an assumption about what should be available.
+    Each entry carries a ``health_status``: installed | missing |
+    version_unknown | permission_error.
     """
     return {
         "tools": tool_inventory(),
         "simulation_mode": settings.simulation_mode,
         "simulated": settings.simulation_mode,
     }
+
+
+@router.get("/health")
+def get_tool_health(user: User = Depends(get_current_user)):
+    """Health snapshot with the Phase 10.2 status vocabulary (+ counts)."""
+    return tool_health_summary()
+
+
+@router.get("/manifest")
+def get_tool_manifest(user: User = Depends(get_current_user)):
+    """Canonical scanner manifests merged with the real install state.
+
+    Each entry is the static declaration (capabilities, category, adapter
+    kind, opt-in gating, default options) plus the live health of the binary.
+    Capabilities are only reported as available when the tool is operational.
+    """
+    return {"manifests": build_manifests()}
 
 
 @router.get("/status")

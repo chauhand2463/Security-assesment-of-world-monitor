@@ -7,20 +7,6 @@ scanning utilities (Nmap, Nuclei, httpx, subfinder, assetfinder, dnsx, gau, What
 behind a multi-agent planner workflow, with a React dashboard and live SSE log
 streaming.
 
-## Status
-
-This repository is in **Phase 2 of an active stabilization effort** (authentication,
-authorization/RBAC, scope enforcement, and a scanner-adapter foundation). The
-foundation is currently: Web UI in React + Vite + TypeScript, backend API in
-FastAPI, data stored in SQLite (Alembic-managed schema). Real, persistable logins
-(PBKDF2-hashed passwords, revocable opaque session tokens), per-user scan isolation
-and target-scope enforcement are in place. Scans still run in simulation mode by
-default: synthetic output is explicitly marked `[SIMULATION]`/`[SIMULATED]`, and
-with `SIMULATION_MODE=false` missing scanner binaries are reported as
-NOT INSTALLED (never fabricated). **No live network probing or production-grade
-reporting exists yet.** See `docs/PHASE_2_IMPLEMENTATION.md`,
-`docs/PHASE_2_REALITY_AUDIT.md`, and `docs/SIH_ARCHITECTURE_AUDIT.md` for details.
-
 ## Architecture & Tech Stack
 
 ### Frontend (`frontend/`)
@@ -110,14 +96,15 @@ directory and never touch `backend/cyberagent.db`.
   `SIMULATION_MODE=false`; install binaries to PATH to enable real runs).
 - Real PDF generation (current PDF endpoint serves stored report bytes labeled simulated).
 - LLM/RAG-based AI analysis, Celery/Redis queueing, and containerization.
-- CI pipeline, World Monitor integration.
+- CI pipeline.
 
 ## Security & Guardrails
 
-- **Simulation mode is on by default.** While enabled, the scan pipeline produces
-  explicit synthetic output marked `[SIMULATION]`/`[SIMULATED]`; do not treat any
-  findings as a real security assessment. With `SIMULATION_MODE=false`, missing
-  binaries are reported as NOT INSTALLED and never faked.
+- **Simulation mode is OFF by default** (real execution). The simulation path is an
+  explicit, operator-chosen mode for sandboxed environments only; its output is
+  always marked `[SIMULATION]`/`[SIMULATED]` and must never be treated as a real
+  security assessment. Missing binaries are reported as NOT INSTALLED and never
+  faked.
 - **Real authentication.** No demo account is auto-created. Registrations are
   open (`/auth/register`) by design for this deployment; password hashing uses
   PBKDF2-SHA256 (600k iterations) and session tokens are stored as SHA-256 digests

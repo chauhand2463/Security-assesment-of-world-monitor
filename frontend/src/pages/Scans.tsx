@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import {
   Layers,
   Terminal,
@@ -13,6 +13,7 @@ import {
   FileText,
   Boxes,
   GitBranch,
+  ExternalLink,
 } from 'lucide-react';
 import { apiFetch, authUrl } from '../api';
 import { PageHeader } from '../components/PageHeader';
@@ -476,6 +477,17 @@ export const Scans: React.FC = () => {
                         </p>
                       </div>
                     </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-2">
+                    <Link
+                      to={`/scans/${selectedScan.id}`}
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-accent/40 bg-accent/10 px-3 py-1.5 text-[11px] text-accent transition-colors duration-500 ease-spring hover:bg-accent/20"
+                    >
+                      <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                      Open full detail
+                    </Link>
+                    <span className="text-[10px] text-faint">execution plan · ledger · verification</span>
                   </div>
 
                   {/* Lifecycle */}

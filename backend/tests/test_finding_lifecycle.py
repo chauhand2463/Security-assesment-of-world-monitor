@@ -174,7 +174,17 @@ def test_external_tool_observation_becomes_candidate_not_confirmed(session):
             Vulnerability.scan_id == scan.id, Vulnerability.source_tool == "nuclei").all()
         assert candidates
         assert all(c.status == lifecycle.STATUS_CANDIDATE for c in candidates)
-        assert all("nuclei" in (c.dedup_key or "") for c in candidates)
+        # Phase 10.7: external candidates now live in the SAME fingerprint
+        # namespace as native findings (no more "external:…" keys).
+        from app.http.fingerprints import host_of
+        from app.observations.fingerprint import finding_fingerprint
+
+        for c in candidates:
+            assert c.dedup_key == finding_fingerprint(
+                c.category or "external_tool", host_of(c.endpoint or c.target) or scan.target,
+                c.endpoint, None)
+            assert "external:" not in (c.dedup_key or "")
+            assert c.fingerprint == c.dedup_key
 
         # The report aggregates must see the candidate count.
         from app.assess import summary as summary_mod

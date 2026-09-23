@@ -4,6 +4,7 @@ import { DashboardLayout } from './layouts/DashboardLayout';
 import { Dashboard } from './pages/Dashboard';
 import { NewScan } from './pages/NewScan';
 import { Scans } from './pages/Scans';
+import { ScanDetail } from './pages/ScanDetail';
 import { Findings } from './pages/Findings';
 import { Assets } from './pages/Assets';
 import { Reports } from './pages/Reports';
@@ -90,6 +91,7 @@ const App: React.FC = () => {
             <Route path="/" element={<Dashboard />} />
             <Route path="/scan/new" element={<NewScan />} />
             <Route path="/scans" element={<Scans />} />
+            <Route path="/scans/:id" element={<ScanDetail />} />
             <Route path="/findings" element={<Findings />} />
             <Route path="/assets" element={<Assets />} />
             <Route path="/reports" element={<Reports />} />

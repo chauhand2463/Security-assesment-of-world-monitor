@@ -149,6 +149,7 @@ class Scan(Base):
     scan_stages = relationship("ScanStage", back_populates="scan", cascade="all, delete-orphan")
     scan_events = relationship("ScanEvent", back_populates="scan", cascade="all, delete-orphan")
     attempts = relationship("ScanAttempt", back_populates="scan", cascade="all, delete-orphan")
+    execution_runs = relationship("ScanExecution", back_populates="scan", cascade="all, delete-orphan")
 
 
 class ToolResult(Base):
@@ -250,6 +251,13 @@ class Vulnerability(Base):
     endpoint_asset_id = Column(Integer, ForeignKey("assets.id"), nullable=True, index=True)
     cve_status = Column(String(20), nullable=True)  # observed | potentially_affected | confirmed
 
+    # Phase 10.6 verification engine state (additive, default "unverified"):
+    # flips to "verified"/"failed"/"not_applicable" only after the deterministic
+    # re-check re-ran over the persisted observations for this finding.  A
+    # verified state therefore always traces back to at least one
+    # ``verifications`` row.
+    verification_state = Column(String(30), nullable=False, default="unverified")
+
     scan = relationship("Scan", back_populates="vulnerabilities")
     evidence_records = relationship("FindingEvidence", back_populates="finding", cascade="all, delete-orphan")
     status_history = relationship("FindingStatusHistory", back_populates="finding", cascade="all, delete-orphan")
@@ -300,6 +308,13 @@ class Observation(Base):
 
     # Phase 9: link the observation onto the project's asset graph (additive).
     asset_id = Column(Integer, ForeignKey("assets.id"), nullable=True, index=True)
+
+    # Phase 10.4: provenance -- which real tool-execution row produced this
+    # observation (additive).  NULL means the observation came from a path that
+    # does not create a ToolExecution row (e.g. the Phase 5 assessment engine's
+    # native HTTP observations), which is honest: lineage says exactly what ran.
+    tool_execution_id = Column(Integer, ForeignKey("tool_executions.id"),
+                               nullable=True, index=True)
 
     scan = relationship("Scan", back_populates="observations")
     graph_asset = relationship("Asset", foreign_keys=[asset_id])
@@ -485,6 +500,37 @@ class ToolReadiness(Base):
     scan = relationship("Scan")
 
 
+class ScanExecution(Base):
+    """Phase 10.3 execution batch: how one scan's plan was actually run.
+
+    Parallel scheduler support (additive).  One row per real execution of a
+    scan plan records the scheduling decision (sequential vs parallel), the
+    bounded concurrency applied, the ordered plan that was executed, and the
+    honest per-state counters.  Nothing here is fabricated: the counters are
+    real increments observed from tool results, and ``strategy`` reflects the
+    concurrency bound the pipeline actually applied.
+    """
+    __tablename__ = "scan_executions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False, index=True)
+    strategy = Column(String(20), nullable=False, default="sequential")  # sequential|parallel
+    max_parallel_tools = Column(Integer, nullable=False, default=1)
+    plan = Column(JSON, nullable=True)  # ordered [{"stage": ..., "tools": [...]}]
+    planned_tools = Column(Integer, nullable=False, default=0)
+    started_tools = Column(Integer, nullable=False, default=0)
+    completed_tools = Column(Integer, nullable=False, default=0)
+    failed_tools = Column(Integer, nullable=False, default=0)
+    skipped_tools = Column(Integer, nullable=False, default=0)
+    status = Column(String(20), nullable=False, default="queued")  # queued|running|completed|cancelled|failed
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    scan = relationship("Scan", back_populates="execution_runs")
+
+
 class ToolExecution(Base):
     """One real attempt (or skip) of an external tool on a scan.
 
@@ -596,6 +642,42 @@ class FindingValidation(Base):
     security_boundary = Column(Text, nullable=True)
     confidence = Column(String(20), nullable=True)
     observation_id = Column(Integer, ForeignKey("observations.id"), nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    scan = relationship("Scan")
+    finding = relationship("Vulnerability")
+
+
+class Verification(Base):
+    """One deterministic re-check run for a finding candidate (Phase 10.6).
+
+    Written by the verification engine, which **never** issues a new network
+    request: it re-runs the deterministic rule over the SAME persisted
+    ``Observation`` rows the finding was derived from, and records whether the
+    candidate is reproduced (``verified``), not reproduced (``failed``), or
+    cannot be re-checked because there is no supporting observation
+    (``not_applicable``).  Only a ``verified`` row permits
+    ``Vulnerability.verification_state`` to be set to ``verified``.
+
+    The verification engine is therefore an auditable, replayable re-proof: the
+    verification_state on a finding always traces back to at least one row here,
+    and rows are append-only so re-runs accumulate without rewriting history.
+    """
+    __tablename__ = "verifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False, index=True)
+    finding_id = Column(Integer, ForeignKey("vulnerabilities.id"), nullable=True, index=True)
+    # method of re-check, e.g. "deterministic.rule" (the only method today).
+    method = Column(String(50), nullable=False)
+    status = Column(String(30), nullable=False)  # verified | failed | not_applicable
+    rule_id = Column(String(100), nullable=True)  # rule that was re-run
+    condition = Column(Text, nullable=True)  # what the re-check asserted
+    reason = Column(Text, nullable=True)
+    observation_ids = Column(JSON, nullable=True)  # persisted observations re-checked
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     duration_ms = Column(Integer, nullable=True)
