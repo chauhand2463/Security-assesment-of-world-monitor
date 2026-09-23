@@ -1094,11 +1094,18 @@ const FindingDetail: React.FC<{ vuln: any; detail?: any }> = ({ vuln, detail }) 
         </div>
       )}
 
-      {(d.evidence?.length > 0 || vuln.evidence_records?.length > 0) && (
+      {((Array.isArray(d.evidence) && d.evidence.length > 0) ||
+        (Array.isArray(vuln.evidence_records) && vuln.evidence_records.length > 0)) && (
         <div>
           <p className="eyebrow mb-1.5">Structured evidence</p>
           <div className="space-y-1.5">
-            {(d.evidence?.length > 0 ? d.evidence : vuln.evidence_records).map((e: any) => {
+            {(
+              Array.isArray(d.evidence) && d.evidence.length > 0
+                ? d.evidence
+                : Array.isArray(vuln.evidence_records)
+                ? vuln.evidence_records
+                : []
+            ).map((e: any) => {
               const integrity = e.integrity || {};
               const ok = integrity.request_ok !== false && integrity.response_ok !== false;
               return (
@@ -1136,7 +1143,7 @@ const FindingDetail: React.FC<{ vuln: any; detail?: any }> = ({ vuln, detail }) 
         </div>
       )}
 
-      {d.history?.length > 0 && (
+      {Array.isArray(d.history) && d.history.length > 0 && (
         <div>
           <p className="eyebrow mb-1.5">Lifecycle history</p>
           <div className="space-y-1">
@@ -1154,7 +1161,7 @@ const FindingDetail: React.FC<{ vuln: any; detail?: any }> = ({ vuln, detail }) 
         </div>
       )}
 
-      {d.proof_of_concept?.safety_constraints?.length > 0 && (
+      {Array.isArray(d.proof_of_concept?.safety_constraints) && d.proof_of_concept.safety_constraints.length > 0 && (
         <div>
           <p className="eyebrow mb-1">Safety constraints</p>
           <ul className="list-disc pl-4 space-y-0.5 text-[10.5px] text-faint">

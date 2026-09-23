@@ -13,28 +13,35 @@ import { Settings } from './pages/Settings';
 import { ToolHealth } from './pages/ToolHealth';
 import { WorldMonitor } from './pages/WorldMonitor';
 import { Auth } from './pages/Auth';
-import { Landing } from './pages/Landing';
+import Landing from './pages/Landing';
 import { NotFound } from './pages/NotFound';
 import { getToken, clearToken, onUnauthorized, apiFetch } from './api';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return getToken() !== null;
   });
 
+  const endSession = () => {
+    window.history.replaceState(null, '', '/');
+    setIsAuthenticated(false);
+  };
+
   useEffect(() => {
-    onUnauthorized(() => setIsAuthenticated(false));
+    onUnauthorized(endSession);
     return () => onUnauthorized(() => {});
   }, []);
 
   const handleLoginSuccess = () => {
+    window.history.replaceState(null, '', '/');
     setIsAuthenticated(true);
   };
 
   const handleLogout = () => {
     const token = getToken();
     clearToken();
-    setIsAuthenticated(false);
+    endSession();
     if (token) {
       apiFetch('/auth/logout', { method: 'POST' }).catch(() => {});
     }
@@ -43,11 +50,32 @@ const App: React.FC = () => {
   /* ---- PUBLIC GATE: real public router for visitors ---- */
   if (!isAuthenticated) {
     return (
-      <Router>
+      <Router key="public">
         <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route path="/auth" element={<Auth onLoginSuccess={handleLoginSuccess} />} />
-          <Route path="*" element={<Landing />} />
+          <Route
+            path="/"
+            element={
+              <ErrorBoundary>
+                <Landing />
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="/auth"
+            element={
+              <ErrorBoundary>
+                <Auth onLoginSuccess={handleLoginSuccess} />
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="*"
+            element={
+              <ErrorBoundary>
+                <NotFound />
+              </ErrorBoundary>
+            }
+          />
         </Routes>
       </Router>
     );
@@ -55,22 +83,24 @@ const App: React.FC = () => {
 
   /* ---- AUTHENTICATED GATE: product unchanged ---- */
   return (
-    <Router>
+    <Router key="authed">
       <DashboardLayout onLogout={handleLogout}>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/scan/new" element={<NewScan />} />
-          <Route path="/scans" element={<Scans />} />
-          <Route path="/findings" element={<Findings />} />
-          <Route path="/assets" element={<Assets />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/chat" element={<AIChat />} />
-          <Route path="/knowledge" element={<KnowledgeBase />} />
-          <Route path="/tools" element={<ToolHealth />} />
-          <Route path="/world-monitor" element={<WorldMonitor />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/scan/new" element={<NewScan />} />
+            <Route path="/scans" element={<Scans />} />
+            <Route path="/findings" element={<Findings />} />
+            <Route path="/assets" element={<Assets />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/chat" element={<AIChat />} />
+            <Route path="/knowledge" element={<KnowledgeBase />} />
+            <Route path="/tools" element={<ToolHealth />} />
+            <Route path="/world-monitor" element={<WorldMonitor />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </ErrorBoundary>
       </DashboardLayout>
     </Router>
   );
