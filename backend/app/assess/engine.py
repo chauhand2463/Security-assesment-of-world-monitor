@@ -505,8 +505,15 @@ def _persist_assessment_tests(db, scan, assessment_plan, report, registry, obser
     from database.models import AssessmentTest
 
     produced_by_test: dict[str, list[int]] = {}
+    endpoints_by_test: dict[str, str | None] = {}
     for row in observation_rows:
         produced_by_test.setdefault(row["test_id"], []).append(row["id"])
+        if endpoints_by_test.get(row["test_id"]) is None:
+            subject = (row.get("subject") or "").strip()
+            if subject.startswith("http"):
+                from app.observations.normalize import normalize_endpoint
+
+                endpoints_by_test[row["test_id"]] = normalize_endpoint(subject)
 
     now = datetime.datetime.utcnow()
     for planned, outcome in zip(assessment_plan.planned, report.outcomes):
@@ -516,7 +523,7 @@ def _persist_assessment_tests(db, scan, assessment_plan, report, registry, obser
             for c in outcome.candidates
             if c.dedup_key in finding_by_key
         ]
-        db.add(AssessmentTest(
+        row = AssessmentTest(
             scan_id=scan.id,
             test_id=planned.test_id,
             name=(test.name if test else planned.test_id),
@@ -525,13 +532,20 @@ def _persist_assessment_tests(db, scan, assessment_plan, report, registry, obser
             reason=outcome.reason or planned.reason or "",
             target=scan.target,
             active=planned.active,
+            endpoint=endpoints_by_test.get(planned.test_id),
             required_observations=list(getattr(test, "required_observations", ()) or []),
             required_capabilities=list(getattr(test, "required_capabilities", ()) or []),
             observation_ids=produced_by_test.get(planned.test_id, []),
             finding_ids=finding_ids,
             started_at=now,
             completed_at=now,
-        ))
+        )
+        db.add(row)
+        db.flush()
+        from app.orchestration import events
+
+        events.emit_assessment_item(db, scan.id, row.id, row.test_id, row.name,
+                                    row.category, row.status, row.endpoint)
 
 
 def _persist_tool_result(db, scan, coverage_summary, observation_count: int):

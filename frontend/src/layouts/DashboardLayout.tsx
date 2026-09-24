@@ -18,6 +18,7 @@ import {
   Crosshair,
   ArrowLeft,
   Globe,
+  Target,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 
@@ -51,6 +52,8 @@ const NAV_GROUPS = [
     label: 'Inventory',
     items: [
       { name: 'Assets', path: '/assets', icon: Server },
+      { name: 'Attack Surface', path: '/surface', icon: Radar },
+      { name: 'Coverage', path: '/coverage', icon: Target },
       { name: 'Tools', path: '/tools', icon: Cpu },
     ],
   },

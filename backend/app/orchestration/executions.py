@@ -305,6 +305,12 @@ def _run_http_probe(db, scan, tool, config, job, state, started) -> dict:
 def _persist_observations(db, scan, tool: str, observations: list,
                           tool_execution_id: int | None = None):
     """Persist legacy probe observation dicts (kind/subject/data/raw shape)."""
+    from app.discovery.endpoints import (
+        KIND_API_ENDPOINT,
+        KIND_API_PARAMETER,
+        KIND_CANDIDATE,
+        KIND_PARAMETER,
+    )
     from app.orchestration import events
     from database.models import Observation
 
@@ -325,6 +331,14 @@ def _persist_observations(db, scan, tool: str, observations: list,
         db.add(row)
         db.flush()
         events.emit_observation(db, scan.id, row.id, row.kind, row.subject, tool)
+        data = row.data_json or {}
+        if row.kind in (KIND_CANDIDATE, KIND_API_ENDPOINT):
+            events.emit_endpoint_discovered(db, scan.id, row.id, row.subject,
+                                            kind=row.kind, source=row.source or "")
+        elif row.kind in (KIND_PARAMETER, KIND_API_PARAMETER):
+            events.emit_parameter_discovered(db, scan.id, row.id, row.subject,
+                                             parameter=str(data.get("parameter") or ""),
+                                             source=row.source or "")
 
 
 def _wm_guard(db, scan):

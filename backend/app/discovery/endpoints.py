@@ -24,12 +24,32 @@ SOURCE_ROBOTS = "robots"
 SOURCE_ROBOTS_SITEMAP = "robots.sitemap"
 SOURCE_SITEMAP = "sitemap"
 SOURCE_HTML = "html"
+SOURCE_HTML_SCRIPT = "html_script"  # a <script src> observable in fetched HTML
+SOURCE_OPENAPI = "openapi"  # an endpoint/parameter declared by an observed OpenAPI doc
 
 # Observation kinds emitted by the endpoint discovery engine.
 KIND_CANDIDATE = "endpoint_candidate"
 KIND_PARAMETER = "parameter_candidate"
 KIND_OUT_OF_SCOPE = "endpoint_out_of_scope"
 KIND_SUMMARY = "endpoint_discovery"
+# Phase 12 additive kinds: static assets and API documents observed on the
+# surface (plus the endpoints/parameters an observed OpenAPI document declares).
+KIND_SCRIPT_ASSET = "script_asset"
+KIND_API_DOCUMENT = "api_document"
+KIND_API_ENDPOINT = "api_endpoint_candidate"
+KIND_API_PARAMETER = "api_parameter_candidate"
+
+# URLs this module may probe for a machine-readable OpenAPI document, in
+# preference order (bounded, well-known advertised locations; probing stops at
+# the first document that parses).  This is a documented discovery act, not an
+# arbitrary-method brute force: every candidate is fetched as GET only.
+OPENAPI_CANDIDATE_PATHS = (
+    "/openapi.json",
+    "/api-docs",
+    "/swagger/v1/swagger.json",
+    "/openapi.yaml",
+    "/api/openapi.json",
+)
 
 _PROBE_FAIL_STATES = ("error", "unreachable", "skipped")
 
@@ -277,7 +297,10 @@ def discover_from_documents(
 
 __all__ = [
     "SOURCE_ROBOTS", "SOURCE_ROBOTS_SITEMAP", "SOURCE_SITEMAP", "SOURCE_HTML",
+    "SOURCE_HTML_SCRIPT", "SOURCE_OPENAPI",
     "KIND_CANDIDATE", "KIND_PARAMETER", "KIND_OUT_OF_SCOPE", "KIND_SUMMARY",
+    "KIND_SCRIPT_ASSET", "KIND_API_DOCUMENT", "KIND_API_ENDPOINT",
+    "KIND_API_PARAMETER", "OPENAPI_CANDIDATE_PATHS",
     "DiscoveryReport", "classify_document", "discover_from_documents",
     "endpoint_key", "links_from_html", "parse_robots", "parse_sitemap",
     "query_parameters", "to_absolute", "without_query",

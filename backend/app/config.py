@@ -110,5 +110,16 @@ class Settings:
         except ValueError:
             self.world_monitor_stale_after_seconds = 3600
 
+        # Phase 12 continuous assessment: whether the in-process scheduler loop
+        # runs (ticks due scan_schedules).  Default on for a self-hosted
+        # platform; tests disable it so the loop never fires in CI.
+        self.scheduler_enabled = _env_bool("SCHEDULER_ENABLED", True)
+        try:
+            self.scheduler_tick_seconds = int(os.getenv("SCHEDULER_TICK_SECONDS", "60"))
+        except ValueError:
+            self.scheduler_tick_seconds = 60
+        if self.scheduler_tick_seconds < 1:
+            self.scheduler_tick_seconds = 60
+
 
 settings = Settings()

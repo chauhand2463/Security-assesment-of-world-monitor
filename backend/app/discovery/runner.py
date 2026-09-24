@@ -23,6 +23,7 @@ from app.discovery.endpoints import (
     KIND_OUT_OF_SCOPE,
     KIND_PARAMETER,
     KIND_SUMMARY,
+    OPENAPI_CANDIDATE_PATHS,
     SOURCE_ROBOTS,
     parse_robots,
     to_absolute,
@@ -31,8 +32,8 @@ from app.http.client import HttpLimits
 from app.http.fingerprints import host_of
 
 _default_limits = HttpLimits(
-    max_requests_per_scan=16,
-    max_requests_per_test=16,
+    max_requests_per_scan=28,
+    max_requests_per_test=28,
     request_timeout=8.0,
     redirect_limit=3,
     response_size_limit=400_000,
@@ -41,6 +42,7 @@ _default_limits = HttpLimits(
 _SNIPPET_MAX = 400
 _MAX_HOSTS = 2
 _MAX_SITEMAPS_PER_BASE = 2
+_MAX_OPENAPI_PER_BASE = len(OPENAPI_CANDIDATE_PATHS)
 
 
 def clip(text: str, limit: int = _SNIPPET_MAX) -> str:
@@ -128,7 +130,8 @@ def _fetch_documents(client: SafeHttpClient, bases: list[str]) -> list[dict]:
 
 
 def _summary_observation(scan, bases: list[str], client: SafeHttpClient,
-                         report, refused: list[str]) -> dict:
+                         report, refused: list[str], extra: dict | None = None) -> dict:
+    extra = extra or {}
     return {
         "kind": KIND_SUMMARY,
         "subject": scan.target,
@@ -138,15 +141,96 @@ def _summary_observation(scan, bases: list[str], client: SafeHttpClient,
             "requests_made": client.requests_made,
             "endpoint_candidates": report.candidate_count,
             "parameter_candidates": report.parameter_count,
+            "script_assets": extra.get("script_assets", 0),
+            "api_documents": extra.get("api_documents", 0),
+            "api_endpoint_candidates": extra.get("api_endpoint_candidates", 0),
+            "api_parameter_candidates": extra.get("api_parameter_candidates", 0),
             "sources": dict(report.sources),
             "refused_in_scope_guard": len(refused),
         },
         "raw": (f"[endpoint_discovery] {report.candidate_count} candidate endpoint(s), "
                 f"{report.parameter_count} parameter(s) from {len(bases)} base(s); "
+                f"{extra.get('script_assets', 0)} script asset(s), "
+                f"{extra.get('api_endpoint_candidates', 0)} API endpoint(s); "
                 f"{len(refused)} out-of-scope URL(s) observed in content and refused."),
         "source": "native_discovery",
         "status": "observed",
     }
+
+
+def _fetch_openapi_candidates(client: SafeHttpClient, bases: list[str],
+                              guard) -> list[dict]:
+    """Probe well-known OpenAPI document locations per base (GET, bounded).
+
+    Probing stops for a base at the first document that *parses*; a 2xx page
+    that is not a parseable OpenAPI document is still recorded as an observed
+    ``api_document`` with an honest parse status.  Nothing is fetched outside
+    the scope guard or the request budget.
+    """
+    from app.discovery.openapi import parse_openapi
+
+    observations: list[dict] = []
+    for base in bases:
+        for candidate in OPENAPI_CANDIDATE_PATHS:
+            if client.requests_made >= client.limits.max_requests_per_scan:
+                break
+            url = f"{base.rstrip('/')}{candidate}"
+            if not guard(url):
+                continue
+            resp = client.get(url)
+            if resp.status not in (200, 203) or not resp.body:
+                continue
+            parsed = parse_openapi(resp.body, url, guard)
+            observations.append({
+                "kind": "api_document",
+                "subject": url,
+                "data": {
+                    "url": url,
+                    "status": "parsed" if parsed["parsed"] else "unsupported",
+                    "reason": parsed["reason"],
+                    "declared_endpoints": len(parsed["endpoints"]),
+                    "declared_parameters": len(parsed["parameters"]),
+                },
+                "raw": (f"[openapi] {url}: {parsed['reason']}; "
+                        f"{len(parsed['endpoints'])} endpoint(s), "
+                        f"{len(parsed['parameters'])} parameter(s) declared."),
+                "source": "native_discovery",
+                "status": "observed",
+            })
+            for endpoint in parsed["endpoints"]:
+                observations.append({
+                    "kind": "api_endpoint_candidate",
+                    "subject": endpoint["url"],
+                    "data": {
+                        "url": endpoint["url"],
+                        "method": endpoint["method"],
+                        "source": "openapi",
+                        "source_document": endpoint["source_url"],
+                    },
+                    "raw": (f"[openapi] declares {endpoint['method']} {endpoint['url']}"),
+                    "source": "native_discovery",
+                    "status": "observed",
+                })
+            for parameter in parsed["parameters"]:
+                observations.append({
+                    "kind": "api_parameter_candidate",
+                    "subject": parameter["url"],
+                    "data": {
+                        "url": parameter["url"],
+                        "parameter": parameter["parameter"],
+                        "location": parameter["location"],
+                        "required": parameter["required"],
+                        "source": "openapi",
+                        "source_document": parameter["source_url"],
+                    },
+                    "raw": (f"[openapi] declares parameter '{parameter['parameter']}' "
+                            f"({parameter['location']}) on {parameter['url']}"),
+                    "source": "native_discovery",
+                    "status": "observed",
+                })
+            if parsed["parsed"]:
+                break
+    return observations
 
 
 def run_endpoint_discovery(db, scan, config: dict, state: dict) -> list[dict]:
@@ -160,6 +244,7 @@ def run_endpoint_discovery(db, scan, config: dict, state: dict) -> list[dict]:
     ``app.http.client`` attribute without a stale import-time binding.
     """
     from app.discovery.endpoints import discover_from_documents
+    from app.discovery.js import script_assets_from_documents
     from app.http.client import SafeHttpClient
 
     guard = build_scan_guard(db, scan)
@@ -168,6 +253,15 @@ def run_endpoint_discovery(db, scan, config: dict, state: dict) -> list[dict]:
         client = SafeHttpClient(guard, limits=_default_limits, capture_tls=False)
         documents = _fetch_documents(client, bases)
         report = discover_from_documents(documents, guard)
+        script_assets = script_assets_from_documents(documents, guard)
+        api_observations = _fetch_openapi_candidates(client, bases, guard)
+
+        extras = {
+            "script_assets": len(script_assets),
+            "api_documents": sum(1 for o in api_observations if o["kind"] == "api_document"),
+            "api_endpoint_candidates": sum(1 for o in api_observations if o["kind"] == "api_endpoint_candidate"),
+            "api_parameter_candidates": sum(1 for o in api_observations if o["kind"] == "api_parameter_candidate"),
+        }
 
         observations: list[dict] = []
         for entry in report.endpoints:
@@ -206,7 +300,22 @@ def run_endpoint_discovery(db, scan, config: dict, state: dict) -> list[dict]:
                 "source": "scope_guard",
                 "status": "skipped",
             })
-        observations.append(_summary_observation(scan, bases, client, report, report.refused))
+        for asset in script_assets:
+            observations.append({
+                "kind": asset["kind"],
+                "subject": asset["url"],
+                "data": {
+                    "url": asset["url"],
+                    "source": asset["source"],
+                    "base_url": asset["base_url"],
+                },
+                "raw": f"[{asset['source']}] static script asset {asset['url']}",
+                "source": "native_discovery",
+                "status": "observed",
+            })
+        observations.extend(api_observations)
+        observations.append(_summary_observation(scan, bases, client, report,
+                                                 report.refused, extras))
         return observations
     except Exception as exc:  # never fabricate; surface the real failure honestly
         return [{

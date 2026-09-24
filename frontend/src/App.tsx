@@ -7,6 +7,8 @@ import { Scans } from './pages/Scans';
 import { ScanDetail } from './pages/ScanDetail';
 import { Findings } from './pages/Findings';
 import { Assets } from './pages/Assets';
+import { AttackSurface } from './pages/AttackSurface';
+import { Coverage } from './pages/Coverage';
 import { Reports } from './pages/Reports';
 import { AIChat } from './pages/AIChat';
 import { KnowledgeBase } from './pages/KnowledgeBase';
@@ -94,6 +96,8 @@ const App: React.FC = () => {
             <Route path="/scans/:id" element={<ScanDetail />} />
             <Route path="/findings" element={<Findings />} />
             <Route path="/assets" element={<Assets />} />
+            <Route path="/surface" element={<AttackSurface />} />
+            <Route path="/coverage" element={<Coverage />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/chat" element={<AIChat />} />
             <Route path="/knowledge" element={<KnowledgeBase />} />

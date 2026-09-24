@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Radar, AlertTriangle, Target, Network, ArrowRight, Footprints, Layers } from 'lucide-react';
+import { Radar, AlertTriangle, Target, Network, ArrowRight, Footprints, Layers, Crosshair } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { apiFetch } from '../api';
+import { apiFetch, getScanCoverage } from '../api';
+import type { SurfaceCoverage } from '../api';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import { SeverityText } from '../components/SeverityBadge';
@@ -16,6 +17,8 @@ export const Dashboard: React.FC = () => {
   const [scans, setScans] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [agg, setAgg] = useState<any>(null);
+  const [surface, setSurface] = useState<SurfaceCoverage | null>(null);
+  const [latestScanId, setLatestScanId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -28,8 +31,18 @@ export const Dashboard: React.FC = () => {
         apiFetch('/dashboard/summary'),
       ]);
       if (scanRes.ok) {
-        setScans(await scanRes.json());
+        const rows = await scanRes.json();
+        setScans(rows);
         setError('');
+        const latest = [...rows].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
+        if (latest) {
+          setLatestScanId(latest.id);
+          const cov = await getScanCoverage(latest.id);
+          setSurface(cov?.surface ?? null);
+        } else {
+          setLatestScanId(null);
+          setSurface(null);
+        }
       } else if (!summaryRes.ok) {
         const errData = await summaryRes.json().catch(() => null);
         setError(errData?.detail || 'Failed to load assessment data.');
@@ -136,6 +149,45 @@ export const Dashboard: React.FC = () => {
           </StatTile>
         </Reveal>
       </div>
+
+      {/* Latest surface coverage */}
+      <Reveal>
+        <div className="panel p-5">
+          <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 text-[12.5px] font-semibold text-text">
+              <Crosshair className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+              Latest observed surface
+            </h2>
+            {latestScanId != null ? (
+              <Link
+                to={`/coverage?scan=${latestScanId}`}
+                className="group inline-flex items-center gap-1 text-[11.5px] font-medium text-accent no-underline transition-colors duration-500 ease-spring hover:text-accent-bright"
+              >
+                Full coverage
+                <ArrowRight className="h-3 w-3 transition-transform duration-500 ease-spring group-hover:translate-x-0.5" strokeWidth={1.75} aria-hidden="true" />
+              </Link>
+            ) : (
+              <span className="eyebrow">assessment #—</span>
+            )}
+          </div>
+          {loading ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {Array.from({ length: 2 }).map((_, i) => (
+                <Skeleton key={i} className="h-16 rounded-xl" />
+              ))}
+            </div>
+          ) : surface == null ? (
+            <p className="text-[11px] text-faint">
+              No observed surface yet — run an assessment and endpoints/parameters will show here from persisted evidence.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <MiniStat label="Endpoints assessed" done={surface.endpoints_assessed} total={surface.endpoints_total} tone="bg-accent" />
+              <MiniStat label="Parameters assessed" done={surface.parameters_assessed} total={surface.parameters_total} tone="bg-high" />
+            </div>
+          )}
+        </div>
+      </Reveal>
 
       {/* Summary + severity */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -352,6 +404,29 @@ const StatTile: React.FC<{
     </div>
   </div>
 );
+
+const MiniStat: React.FC<{ label: string; done: number; total: number; tone: string }> = ({
+  label,
+  done,
+  total,
+  tone,
+}) => {
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  return (
+    <div className="rounded-xl border border-line bg-surface-2/60 px-3.5 py-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-[11.5px] font-medium text-text">{label}</p>
+        <p className="mono-cell text-[10px] text-faint">{done}/{total}</p>
+      </div>
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+        <div className={`h-full rounded-full ${tone} transition-[width] duration-700 ease-spring`} style={{ width: `${pct}%` }} />
+      </div>
+      <p className="mono-cell mt-1 text-[9.5px] text-faint">
+        {total > 0 ? `${pct}% of observed surface covered` : 'nothing observed'}
+      </p>
+    </div>
+  );
+};
 
 const LIFECYCLE_META: Array<[string, string]> = [
   ['confirmed', 'Confirmed (validated)'],

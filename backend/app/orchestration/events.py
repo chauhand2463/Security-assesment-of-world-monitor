@@ -41,11 +41,17 @@ EVENT_FINDING_CANDIDATE = "finding.candidate"
 EVENT_FINDING_VERIFIED = "finding.verified"
 EVENT_FINDING_REJECTED = "finding.rejected"
 
+# Phase 12 surface + assessment-program events (additive, typed-ledger only).
+EVENT_ENDPOINT = "endpoint.discovered"
+EVENT_PARAMETER = "parameter.discovered"
+EVENT_ASSESSMENT = "assessment.item"
+
 KNOWN_EVENT_TYPES = frozenset({
     EVENT_STATE, EVENT_STAGE, EVENT_TOOL, EVENT_PREFLIGHT, EVENT_PROGRESS,
     EVENT_COVERAGE, EVENT_FINDING, EVENT_VALIDATION, EVENT_DONE, EVENT_ERROR,
     EVENT_ASSET, EVENT_OBSERVATION,
     EVENT_FINDING_CANDIDATE, EVENT_FINDING_VERIFIED, EVENT_FINDING_REJECTED,
+    EVENT_ENDPOINT, EVENT_PARAMETER, EVENT_ASSESSMENT,
 })
 
 
@@ -176,6 +182,39 @@ def emit_finding_rejected(db, scan_id: int, finding_id: int | None,
     })
 
 
+def emit_endpoint_discovered(db, scan_id: int, observation_id: int, url: str,
+                             kind: str = "", source: str = "") -> int:
+    """Emit after an endpoint-surface observation row was persisted."""
+    return emit(db, scan_id, EVENT_ENDPOINT, {
+        "observation_id": observation_id,
+        "url": url,
+        "kind": kind,
+        "source": source,
+    })
+
+
+def emit_parameter_discovered(db, scan_id: int, observation_id: int, url: str,
+                              parameter: str, source: str = "") -> int:
+    """Emit after a parameter-surface observation row was persisted."""
+    return emit(db, scan_id, EVENT_PARAMETER, {
+        "observation_id": observation_id,
+        "url": url,
+        "parameter": parameter,
+        "source": source,
+    })
+
+
+def emit_assessment_item(db, scan_id: int, assessment_test_id: int, test_id: str,
+                         name: str, category: str, status: str,
+                         endpoint: str | None = None) -> int:
+    """Emit after an assessment-test row was persisted/updated (after a run)."""
+    data = {"assessment_test_id": assessment_test_id, "test_id": test_id,
+            "name": name, "category": category, "status": status}
+    if endpoint:
+        data["endpoint"] = endpoint
+    return emit(db, scan_id, EVENT_ASSESSMENT, data)
+
+
 def replay(db, scan_id: int, cursor: int = 0, limit: int = 500) -> list[dict]:
     """Replay persisted events after ``cursor`` (exclusive by event id)."""
     rows = (
@@ -206,10 +245,13 @@ __all__ = [
     "emit", "emit_state", "emit_stage", "emit_tool", "emit_finding",
     "emit_validation", "emit_asset_discovered", "emit_observation",
     "emit_finding_candidate", "emit_finding_verified", "emit_finding_rejected",
+    "emit_endpoint_discovered", "emit_parameter_discovered",
+    "emit_assessment_item",
     "replay", "next_seq",
     "EVENT_STATE", "EVENT_STAGE", "EVENT_TOOL", "EVENT_PREFLIGHT",
     "EVENT_PROGRESS", "EVENT_COVERAGE", "EVENT_FINDING", "EVENT_VALIDATION",
     "EVENT_DONE", "EVENT_ERROR",
     "EVENT_ASSET", "EVENT_OBSERVATION",
     "EVENT_FINDING_CANDIDATE", "EVENT_FINDING_VERIFIED", "EVENT_FINDING_REJECTED",
+    "EVENT_ENDPOINT", "EVENT_PARAMETER", "EVENT_ASSESSMENT",
 ]

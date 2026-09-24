@@ -1,14 +1,21 @@
+import threading
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database.connection import verify_schema, seed_defaults
 from app.config import settings
-from app.api import scans, chat, reports, auth, findings, tools, system, world_monitor, dashboard
+from app.api import scans, chat, reports, auth, findings, tools, system, world_monitor, dashboard, schedules
 
 app = FastAPI(
     title="CyberAgent API",
     description="Evidence-first security assessment platform. World Monitor and custom authorized targets run one engine; findings derive only from persisted observations.",
     version="1.0.0"
 )
+
+# Daemon thread for Phase 12 continuous assessment.  Started once at import
+# (guarded by settings) and stopped at process exit; the event is kept for
+# shutdown/cancellation hooks.
+_scheduler_stop: threading.Event | None = None
 
 # CORS is configuration-driven. Credentials are allowed because login
 # sessions may be delivered via cookie; the origin list is explicit (no
@@ -28,6 +35,9 @@ app.add_middleware(
 def on_startup():
     verify_schema()
     seed_defaults()
+    global _scheduler_stop
+    from app.execution.schedule_loop import start_scheduler
+    _scheduler_stop = start_scheduler()
 
 # Include endpoints
 app.include_router(auth.router)
@@ -39,6 +49,7 @@ app.include_router(tools.router)
 app.include_router(system.router)
 app.include_router(world_monitor.router)
 app.include_router(dashboard.router)
+app.include_router(schedules.router)
 
 @app.get("/")
 def read_root():

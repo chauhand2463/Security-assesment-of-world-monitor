@@ -19,6 +19,9 @@ _TMP_DB = os.path.join(_TMP_DB_DIR, "test.db").replace(os.sep, "/")
 os.environ["DATABASE_URL"] = f"sqlite:///{_TMP_DB}"
 os.environ["SIMULATION_MODE"] = "true"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173,http://127.0.0.1:5173"
+# Phase 12 continuous-assessment loop must never fire inside tests; the ticker
+# remains explicitly opt-in and is exercised through deterministic unit calls.
+os.environ["SCHEDULER_ENABLED"] = "false"
 
 import pytest
 from alembic import command

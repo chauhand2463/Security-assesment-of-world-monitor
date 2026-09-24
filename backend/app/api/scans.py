@@ -730,6 +730,150 @@ def get_scan_coverage(scan_id: int, user: User = Depends(get_current_user), db: 
         "security_score": scan.security_score,
         "assessment": _assessment_coverage(db, scan.id),
         "dimensions": dimension_coverage(db, scan.id, scan.target or ""),
+        "surface": _surface_coverage(db, scan.id),
+    }
+
+
+def _surface_coverage(db, scan_id: int):
+    from app.discovery.inventory import surface_coverage
+
+    return surface_coverage(db, scan_id)
+
+
+@router.get("/{scan_id}/surface")
+def get_scan_surface(scan_id: int, user: User = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Phase 12: the observed attack surface of one scan (persisted evidence only).
+
+    Everything returned derives from real Observation/Asset rows: no endpoint,
+    parameter, host or asset is ever invented, and parameter values are never
+    surfaced.
+    """
+    scan = get_owned_scan(db, user, scan_id)
+    from app.discovery.inventory import surface_snapshot
+
+    return surface_snapshot(db, scan)
+
+
+@router.get("/{scan_id}/surface/endpoints")
+def get_scan_surface_endpoints(scan_id: int, user: User = Depends(get_current_user),
+                               db: Session = Depends(get_db)):
+    """Phase 12: observed endpoints for a scan (query-stripped, deduplicated)."""
+    get_owned_scan(db, user, scan_id)
+    from app.discovery.inventory import endpoint_inventory
+
+    return {"scan_id": scan_id, "endpoints": endpoint_inventory(db, scan_id)}
+
+
+@router.get("/{scan_id}/surface/parameters")
+def get_scan_surface_parameters(scan_id: int, user: User = Depends(get_current_user),
+                                db: Session = Depends(get_db)):
+    """Phase 12: observed parameters for a scan (names only, never values)."""
+    get_owned_scan(db, user, scan_id)
+    from app.discovery.parameters import parameter_inventory
+
+    return {"scan_id": scan_id, "parameters": parameter_inventory(db, scan_id)}
+
+
+@router.get("/{scan_id}/assessment-plan")
+def get_scan_assessment_plan(scan_id: int, user: User = Depends(get_current_user),
+                             db: Session = Depends(get_db)):
+    """Phase 12: the deterministic assessment program derived from this surface.
+
+    Read-only: shows which registered tests would apply to which observed
+    endpoints/parameters (or why they are skipped) *before* a real run.
+    """
+    scan = get_owned_scan(db, user, scan_id)
+    from app.assess.surface_planner import plan_surface
+
+    return plan_surface(db, scan).to_dict()
+
+
+@router.get("/{scan_id}/timeline")
+def get_scan_timeline(scan_id: int, user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    """Phase 12: chronological surface-discovery timeline for a scan."""
+    from app.orchestration import events as ev
+
+    get_owned_scan(db, user, scan_id)
+    rows = (
+        db.query(ScanEvent)
+        .filter(ScanEvent.scan_id == scan_id,
+                ScanEvent.event_type.in_((ev.EVENT_ENDPOINT, ev.EVENT_PARAMETER,
+                                          ev.EVENT_ASSESSMENT, ev.EVENT_ASSET)))
+        .order_by(ScanEvent.id.asc())
+        .all()
+    )
+    return {
+        "scan_id": scan_id,
+        "items": [
+            {
+                "id": r.id,
+                "type": r.event_type,
+                "data": r.data or {},
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/{scan_id}/diff")
+def get_scan_surface_diff(scan_id: int, compare_to: int | None = None,
+                          user: User = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """Phase 12: surface diff vs another scan of the same target (default: previous).
+
+    Compares observed endpoint/parameter inventories between two scans to show
+    what changed on the surface without re-scanning.
+    """
+    scan = get_owned_scan(db, user, scan_id)
+    from app.discovery.inventory import endpoint_inventory
+    from app.discovery.parameters import parameter_inventory
+
+    def _inventory(scan_row):
+        eps = endpoint_inventory(db, scan_row.id)
+        params = parameter_inventory(db, scan_row.id)
+        return (
+            {e["url"] for e in eps},
+            {(p["endpoint"], p["parameter"]) for p in params},
+        )
+
+    if compare_to is None:
+        prev = (
+            db.query(Scan)
+            .filter(Scan.project_id == scan.project_id, Scan.id < scan.id)
+            .order_by(Scan.id.desc())
+            .first()
+        )
+        compare_to = prev.id if prev is not None else None
+
+    if compare_to is None or compare_to == scan.id:
+        return {"scan_id": scan.id, "compare_to": compare_to,
+                "endpoints_added": [], "endpoints_removed": [],
+                "parameters_added": [], "parameters_removed": [],
+                "note": "No previous scan to compare against."}
+
+    other = db.query(Scan).filter(Scan.id == compare_to).first()
+    if other is None or other.project_id != scan.project_id:
+        raise HTTPException(status_code=404, detail="Compare scan not found (or not owned).")
+
+    eps_a, params_a = _inventory(scan)
+    eps_b, params_b = _inventory(other)
+    urls_a = {u for u, _ in params_a}
+    urls_b = {u for u, _ in params_b}
+
+    return {
+        "scan_id": scan.id,
+        "compare_to": other.id,
+        "target": scan.target,
+        "endpoints_added": sorted(eps_a - eps_b),
+        "endpoints_removed": sorted(eps_b - eps_a),
+        "parameters_added": sorted(f"{u}?{n}" for u, n in (params_a - params_b)),
+        "parameters_removed": sorted(f"{u}?{n}" for u, n in (params_b - params_a)),
+        "endpoint_count_a": len(eps_a),
+        "endpoint_count_b": len(eps_b),
+        "note": "Diff is computed from persisted observations only.",
     }
 
 

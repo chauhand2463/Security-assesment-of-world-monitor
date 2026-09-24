@@ -144,6 +144,10 @@ class Scan(Base):
     # reruns (never fabricated: each row describes one real enqueued execution).
     schedule_cadence = Column(String(50), nullable=True)
     attempt_count = Column(Integer, nullable=True, default=1)
+    # Phase 12: the schedule that created this scan (when it was not a manual
+    # trigger).  NULL for interactive/retried scans -- a scan that was never
+    # scheduled must never appear to be one.
+    source_schedule_id = Column(Integer, ForeignKey("scan_schedules.id"), nullable=True)
 
     executions = relationship("ToolExecution", back_populates="scan", cascade="all, delete-orphan")
     scan_stages = relationship("ScanStage", back_populates="scan", cascade="all, delete-orphan")
@@ -814,6 +818,36 @@ class WorldMonitorAPIEndpoint(Base):
 
     target = relationship("WorldMonitorTarget", back_populates="api_endpoints")
     observation = relationship("Observation")
+
+
+class ScanSchedule(Base):
+    """One operator-defined recurrent scan (Phase 12, additive).
+
+    A schedule is a recurrence *definition*, not a scan: each due execution
+    creates a fresh ``Scan`` row carrying ``source_schedule_id`` and a
+    ``ScanAttempt`` with ``trigger='schedule'``, so a scheduled run is as
+    traceable as a manual one.  ``next_run_at`` is derived deterministically
+    from ``cadence`` + ``interval``; it is never free-formed.
+    """
+    __tablename__ = "scan_schedules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(255), ForeignKey("users.id"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    name = Column(String(255), nullable=True)
+    target = Column(String(255), nullable=False)
+    cadence = Column(String(50), nullable=False, default="daily")  # hourly | daily | weekly
+    interval = Column(Integer, nullable=False, default=1)  # every N cadence units
+    enabled = Column(Boolean, nullable=False, default=True)
+    next_run_at = Column(DateTime, nullable=False)
+    last_run_at = Column(DateTime, nullable=True)
+    last_run_status = Column(String(50), nullable=True)  # queued | running | completed | failed | cancelled
+    last_scan_id = Column(Integer, nullable=True)
+    config = Column(JSON, nullable=True)  # scan configuration snapshot used by scheduled runs
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+
+    project = relationship("Project")
 
 
 class ScanAttempt(Base):
