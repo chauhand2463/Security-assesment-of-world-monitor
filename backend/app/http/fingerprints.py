@@ -63,7 +63,11 @@ def fetch_tls_info(url: str, timeout: float = 8.0) -> dict | None:
                     "issuer": _name_tuple(cert.get("issuer")),
                     "not_before": cert.get("notBefore"),
                     "not_after": cert.get("notAfter"),
-                    "subject_alt_names": [entry[1] for entry in cert.get("subjectAltName", ())],
+                    "subject_alt_names": [
+                        entry[1]
+                        for entry in cert.get("subjectAltName", ())
+                        if isinstance(entry, (tuple, list)) and len(entry) >= 2
+                    ],
                     "expired": _is_expired(cert.get("notAfter")),
                     "provider": "native_tls",
                 }
@@ -72,7 +76,22 @@ def fetch_tls_info(url: str, timeout: float = 8.0) -> dict | None:
 
 
 def _name_tuple(entries) -> list[list[str]]:
-    return [[part[0], part[1]] for part in (entries or [])]
+    """Flatten ``getpeercert()`` subject/issuer RDNs into ``[name, value]`` pairs.
+
+    ``getpeercert()`` returns RDNs as nested groups: each group is a tuple of
+    ``(oid, value)`` pairs, and a group holding a single attribute is a 1-tuple.
+    Both levels are explicitly guarded instead of blindly indexed, so a
+    malformed or empty subject/issuer degrades to ``[]`` rather than raising
+    ``IndexError`` mid-probe.
+    """
+    out: list[list[str]] = []
+    for group in (entries or []):
+        if not isinstance(group, (tuple, list)):
+            continue
+        for pair in group:
+            if isinstance(pair, (tuple, list)) and len(pair) >= 2:
+                out.append([str(pair[0]), str(pair[1])])
+    return out
 
 
 def _is_expired(not_after: str | None) -> bool | None:

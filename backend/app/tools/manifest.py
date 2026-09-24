@@ -83,6 +83,12 @@ MANIFESTS: tuple[ScannerManifest, ...] = (
         description="World Monitor deployment discovery over real HTTP (explicit config only).",
     ),
     ScannerManifest(
+        tool="endpoint_discovery", binary=None, category="http",
+        adapter_kind="probe",
+        capabilities=(CAP_URL_DISCOVERY,), output_format="structured", native=True,
+        description="Native endpoint/parameter discovery from robots.txt, sitemap and root HTML links (real evidence only).",
+    ),
+    ScannerManifest(
         tool="subfinder", binary="subfinder", category="recon", adapter_kind="legacy",
         capabilities=(CAP_SUBDOMAIN_ENUMERATION,), input_requirements=("domain",),
         active=False,

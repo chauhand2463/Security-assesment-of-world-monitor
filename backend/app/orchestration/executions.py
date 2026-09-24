@@ -89,9 +89,7 @@ def _begin_execution(db, scan, tool: str, attempt: int) -> object:
 
 
 def _adapter_kind(tool: str) -> str:
-    if tool == "real_dns":
-        return "native_probe"
-    if tool == "world_monitor_discovery":
+    if tool in ("real_dns", "world_monitor_discovery", "endpoint_discovery"):
         return "native_probe"
     if get_adapter(tool) is not None:
         return "adapter"
@@ -196,6 +194,8 @@ def execute_tool(db, scan, tool: str, config: dict, job, state: dict) -> dict:
         return _run_tcp_probe(db, scan, tool, config, job, state, started)
     if tool == "real_http":
         return _run_http_probe(db, scan, tool, config, job, state, started)
+    if tool == "endpoint_discovery":
+        return _run_endpoint_discovery(db, scan, tool, config, job, state, started)
     if tool == "world_monitor_discovery":
         return _run_world_monitor_discovery(db, scan, tool, config, job, started)
     if tool in _LEGACY_RUNNERS:
@@ -203,6 +203,35 @@ def execute_tool(db, scan, tool: str, config: dict, job, state: dict) -> dict:
     if get_adapter(tool) is not None:
         return _run_adapter(db, scan, tool, config, job, started)
     return {"tool": tool, "status": scanner_tools.STATE_EXECUTION_FAILED}
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 endpoint discovery (native, real evidence only)
+# ---------------------------------------------------------------------------
+def _run_endpoint_discovery(db, scan, tool, config, job, state, started) -> dict:
+    from app.discovery.runner import run_endpoint_discovery as _run_discovery
+    from app.orchestration import events
+
+    observations = _run_discovery(db, scan, config, state)
+    duration_ms = int((time.monotonic() - started) * 1000)
+    ex = _begin_execution(db, scan, tool, 1)
+    _persist_observations(db, scan, tool, observations, tool_execution_id=ex.id)
+    _finish_execution(db, ex, status="completed", duration_ms=duration_ms,
+                      parsed_observations=len(observations))
+
+    candidates = sum(1 for o in observations if o.get("kind") == "endpoint_candidate")
+    parameters = sum(1 for o in observations if o.get("kind") == "parameter_candidate")
+    refused = sum(1 for o in observations if o.get("kind") == "endpoint_out_of_scope")
+    log = (f"[endpoint_discovery] {candidates} candidate endpoint(s), "
+           f"{parameters} parameter(s), {refused} out-of-scope refused; "
+           f"{len(observations)} observation(s) recorded.")
+    _save_result(db, scan.id, tool, {"status": "success", "log": log})
+    events.emit_tool(db, scan.id, tool, "completed", attempt=1,
+                     detail={"observations": len(observations),
+                             "candidates": candidates,
+                             "parameters": parameters,
+                             "refused": refused})
+    return {"tool": tool, "status": "success", "observations": observations, "log": log}
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +318,10 @@ def _persist_observations(db, scan, tool: str, observations: list,
             raw_output=clip(o.get("raw") or ""),
             tool_execution_id=tool_execution_id,
         )
+        if o.get("source") is not None:
+            row.source = o["source"]
+        if o.get("status") is not None:
+            row.status = o["status"]
         db.add(row)
         db.flush()
         events.emit_observation(db, scan.id, row.id, row.kind, row.subject, tool)

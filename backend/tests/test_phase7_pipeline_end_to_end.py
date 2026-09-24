@@ -228,11 +228,11 @@ def test_phase7_pipeline_completes_with_honest_trail(monkeypatch, session):
         assert [s.name for s in stages][0] == "PRECHECK"
 
         executions = db.query(ToolExecution).filter(ToolExecution.scan_id == scan_id).all()
-        assert len(executions) == 11  # probes + 6 legacy + nmap + httpx
+        assert len(executions) == 12  # 3 probes + endpoint_discovery + 6 legacy + nmap + httpx
         assert {e.status for e in executions} == {"completed"}
 
         tool_results = db.query(ToolResult).filter(ToolResult.scan_id == scan_id).all()
-        assert len(tool_results) == 12  # 11 planned tools + native_assessment (Phase 5 engine)
+        assert len(tool_results) == 13  # 12 planned tools + native_assessment (Phase 5 engine)
         assert all(t.status == "Completed" for t in tool_results)
 
         obs = db.query(Observation).filter(Observation.scan_id == scan_id).all()
@@ -261,9 +261,9 @@ def test_phase7_pipeline_completes_with_honest_trail(monkeypatch, session):
         payload = report.json_content
         assert payload["findings"]
         assert payload["execution_platform_version"] == "phase7"
-        assert payload["execution_trail"]["total_tasks"] == 24
+        assert payload["execution_trail"]["total_tasks"] == 25
         assert len(payload["stages"]) == 13
-        assert len(payload["executions"]) == 11
+        assert len(payload["executions"]) == 12
         assert payload["ml_advisory"]
         assert payload["preflight"]["runnable"] is True
         assert scan.preflight_json["missing"]  # subfinder may present; others absent -> honest

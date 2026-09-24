@@ -497,6 +497,7 @@ def _populate_asset_graph(db, scan):
     from app.orchestration import events
     from database.models import Asset, Observation
     from app.http.fingerprints import host_of
+    from app.discovery.endpoints import KIND_OUT_OF_SCOPE
 
     observations = (
         db.query(Observation)
@@ -533,6 +534,8 @@ def _populate_asset_graph(db, scan):
     host_root = _find_or_create_asset("host", scan.target, source="scan_target")
     for obs in observations:
         if obs.asset_id:
+            continue
+        if obs.kind == KIND_OUT_OF_SCOPE:
             continue
         subject = (obs.subject or scan.target)
         if "://" in subject:

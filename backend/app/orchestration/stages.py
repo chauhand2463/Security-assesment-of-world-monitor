@@ -76,6 +76,7 @@ TOOL_TO_STAGE: dict[str, str] = {
     # http discovery
     "httpx": HTTP_DISCOVERY,
     "gau": HTTP_DISCOVERY,
+    "endpoint_discovery": HTTP_DISCOVERY,
     # technology identification
     "whatweb": TECHNOLOGY_IDENTIFICATION,
     # vulnerability discovery (extras opt-in)
@@ -98,6 +99,7 @@ DEFAULT_TOOLS: dict[str, bool] = {
     "nmap": True,
     "httpx": True,
     "gau": True,
+    "endpoint_discovery": True,
     "whatweb": True,
     "nuclei": True,
     "ffuf": False,

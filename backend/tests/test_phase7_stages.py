@@ -33,6 +33,7 @@ def test_tools_map_to_existing_stages():
 
 def test_default_tools_cover_the_builtin_plan_and_extras_are_opt_in():
     builtin = {"real_dns", "real_tcp", "real_http", "world_monitor_discovery",
+               "endpoint_discovery",
                "subfinder", "assetfinder",
                "dnsx", "nmap", "httpx", "gau", "whatweb", "nuclei"}
     assert set(stages.TOOL_TO_STAGE) == builtin | set(stages._PENTEST_EXTRAS)
