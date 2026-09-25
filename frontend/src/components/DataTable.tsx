@@ -19,6 +19,8 @@ interface DataTableProps<T> {
   error?: string;
   onRowClick?: (row: T) => void;
   onRetry?: () => void;
+  /** When false the outer border/radius shell is omitted so the table can sit inside a Card. */
+  bordered?: boolean;
 }
 
 export const DataTable = <T,>({
@@ -30,6 +32,7 @@ export const DataTable = <T,>({
   error,
   onRowClick,
   onRetry,
+  bordered = true,
 }: DataTableProps<T>): React.ReactElement => {
   if (error) {
     return (
@@ -52,7 +55,7 @@ export const DataTable = <T,>({
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-line">
+    <div className={`${bordered ? 'overflow-hidden rounded-2xl border border-line' : ''}`}>
       <div className="overflow-x-auto">
         <table className="tbl w-full border-collapse">
           <thead>

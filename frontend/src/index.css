@@ -236,6 +236,13 @@ body::after {
   border-bottom: none;
 }
 
+/* Numeric/action columns align right — must win over the left-aligned rule
+   above (unlayered rules outrank Tailwind's layered utilities). */
+.tbl th.text-right,
+.tbl td.text-right {
+  text-align: right;
+}
+
 /* ---- Status dots ---- */
 .dot {
   display: inline-block;
@@ -335,11 +342,13 @@ body::after {
 }
 
 /* Modal / drawer overlay chrome (dimmed scrim, still transparent enough to
-   keep the page legible around the panel). */
+   keep the page legible around the panel). The scrim must stay BELOW the
+   content panel: it lives at stacking level 0 while the panel above it carries
+   an explicit z-index, so the dim + backdrop blur only ever affect the page. */
 .overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 0;
   background: rgba(4, 4, 4, 0.58);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);

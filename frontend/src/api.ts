@@ -462,8 +462,28 @@ export interface FindingDetail extends FindingRow {
   verifications: VerificationRow[];
 }
 
+export interface EvidenceIntegrity {
+  request_ok: boolean;
+  response_ok: boolean;
+}
+
+export interface EvidenceProvenance {
+  execution_id: number | null;
+  tool: string | null;
+  stage: string | null;
+  attempt: number | null;
+  status: string | null;
+  duration_ms: number | null;
+  parsed_observations?: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+  exit_code?: number | null;
+  termination_reason?: string | null;
+}
+
 export interface EvidenceRecord {
-  id: number;
+  id?: number;
+  evidence_id?: number;
   observation_id: number | null;
   evidence_type: string;
   request: Record<string, unknown> | null;
@@ -477,7 +497,8 @@ export interface EvidenceRecord {
   original_size: number | null;
   captured_size: number | null;
   truncated: boolean | null;
-  integrity: string;
+  integrity: EvidenceIntegrity;
+  provenance?: EvidenceProvenance | null;
 }
 
 export interface FindingHistoryEntry {

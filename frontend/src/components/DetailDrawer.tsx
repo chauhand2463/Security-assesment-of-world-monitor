@@ -26,12 +26,14 @@ export const DetailDrawer: React.FC<DetailDrawerProps> = ({
   const lock = useCallback(() => {
     openDrawerCount += 1;
     document.body.style.overflow = 'hidden';
+    document.getElementById('main')?.style.setProperty('overflow', 'hidden');
   }, []);
 
   const unlock = useCallback(() => {
     openDrawerCount = Math.max(0, openDrawerCount - 1);
     if (openDrawerCount === 0) {
       document.body.style.overflow = '';
+      document.getElementById('main')?.style.setProperty('overflow', '');
     }
   }, []);
 
@@ -61,7 +63,7 @@ export const DetailDrawer: React.FC<DetailDrawerProps> = ({
         onClick={onClose}
         className="overlay absolute inset-0 cursor-default"
       />
-      <div className="absolute inset-y-0 right-0 flex w-full flex-col border-l border-line bg-surface shadow-[var(--shadow-float)] sm:w-2/3 md:w-1/2 lg:w-[34rem] xl:w-[38rem]">
+      <div className="absolute inset-y-0 right-0 z-10 flex w-full flex-col border-l border-line bg-surface shadow-[var(--shadow-float)] sm:w-2/3 md:w-1/2 lg:w-[34rem] xl:w-[38rem]">
         <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-4">
           <div className="minw-0 flex-1 text-[13.5px] font-semibold text-text">{title}</div>
           <button
@@ -74,7 +76,7 @@ export const DetailDrawer: React.FC<DetailDrawerProps> = ({
           <X className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
           </button>
         </div>
-        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5">{children}</div>
+        <div className="scrollbar-thin overscroll-contain min-h-0 flex-1 overflow-y-auto px-5 py-5">{children}</div>
         {footer && (
           <div className="flex flex-wrap items-center gap-2 border-t border-line px-5 py-3.5">{footer}</div>
         )}

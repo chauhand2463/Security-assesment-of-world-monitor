@@ -282,11 +282,30 @@ export const Findings: React.FC = () => {
 /* Evidence helpers — everything here renders persisted record fields only.  */
 /* ------------------------------------------------------------------------- */
 
-const integrityTone = (integrity: string): string => {
+interface IntegrityObject {
+  request_ok?: boolean;
+  response_ok?: boolean;
+}
+
+const integrityTone = (integrity: IntegrityObject | string | null | undefined): string => {
+  if (integrity && typeof integrity === 'object') {
+    if (integrity.request_ok === true && integrity.response_ok === true) return 'matched';
+    if (integrity.request_ok === false || integrity.response_ok === false) return 'mismatched';
+    return 'unverified';
+  }
   const v = (integrity || '').toLowerCase();
   if (v.includes('match') || v === 'intact') return 'matched';
   if (v.includes('mismatch') || v.includes('failed') || v.includes('break')) return 'mismatched';
   return 'unverified';
+};
+
+const integrityLabel = (integrity: IntegrityObject | string | null | undefined): string => {
+  if (integrity && typeof integrity === 'object') {
+    if (integrity.request_ok === true && integrity.response_ok === true) return 'verified';
+    if (integrity.request_ok === false || integrity.response_ok === false) return 'MISMATCH';
+    return 'unverified';
+  }
+  return integrity || 'unverified';
 };
 
 const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated?: (id: number) => void }> = ({
@@ -471,10 +490,11 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
               </div>
             ) : (
               <div className="space-y-2">
-                {evidence.map((e: any) => {
+                {evidence.map((e: any, evidenceIdx: number) => {
                   const integrity = integrityTone(e.integrity);
+                  const evidenceNo = e.evidence_id ?? e.id ?? evidenceIdx;
                   return (
-                    <div key={e.id} className="rounded-xl border border-line p-3 text-[10.5px]">
+                    <div key={evidenceNo} className="rounded-xl border border-line p-3 text-[10.5px]">
                       <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                         <span className="mono-cell rounded-md border border-accent/30 bg-accent/5 px-1.5 py-0.5 text-[9.5px] text-accent">
                           {e.evidence_type}
@@ -493,7 +513,7 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
                               : 'border-line text-faint'
                           }`}
                         >
-                          integrity: {e.integrity || 'unverified'}
+                          integrity: {integrityLabel(e.integrity)}
                         </span>
                         <span className="mono-cell rounded-md border border-line px-1.5 py-0.5 text-[9px] text-faint">
                           {e.redaction_status}
@@ -504,11 +524,26 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
                           </span>
                         )}
                         <span className="mono-cell rounded-md border border-line px-1.5 py-0.5 text-[9px] text-faint">
-                          #{e.id}
+                          #{evidenceNo}
                         </span>
                       </div>
                       <p className="text-muted"><span className="text-faint">expected:</span> {e.expected || '—'}</p>
                       <p className="text-muted"><span className="text-faint">actual:</span> {e.actual || '—'}</p>
+                      {e.provenance && (
+                        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-line/60 pt-1.5 text-[9.5px] text-faint">
+                          <span className="font-mono text-[9.5px] text-muted">{e.provenance.tool || 'tool'}</span>
+                          {e.provenance.stage && <span>· {e.provenance.stage}</span>}
+                          {e.provenance.attempt != null && <span>· attempt {e.provenance.attempt}</span>}
+                          <span>· {e.provenance.status || 'unknown'}</span>
+                          {e.provenance.duration_ms != null && (
+                            <span>· {(e.provenance.duration_ms / 1000).toFixed(1)}s</span>
+                          )}
+                          {e.provenance.exit_code != null && <span>· exit {e.provenance.exit_code}</span>}
+                          {e.provenance.execution_id != null && (
+                            <span className="soft-link font-mono">exec #{e.provenance.execution_id}</span>
+                          )}
+                        </div>
+                      )}
                       {(e.original_size != null || e.captured_size != null) && (
                         <p className="mt-1 mono-cell text-[9px] text-faint">
                           captured {e.captured_size ?? '—'}B of {e.original_size ?? '—'}B
@@ -550,8 +585,8 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
                 Verifications ({verifications.length})
               </p>
               <div className="space-y-1.5">
-                {verifications.map((v: any) => (
-                  <div key={v.id} className="rounded-xl border border-line px-3 py-2 text-[10.5px]">
+                {verifications.map((v: any, vi: number) => (
+                  <div key={v.id ?? vi} className="rounded-xl border border-line px-3 py-2 text-[10.5px]">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="mono-cell text-[10px] text-muted">{v.method}</span>
                       <StatusBadge status={v.status ?? 'unverified'} />
@@ -591,9 +626,9 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
                 Verdict history
               </p>
               <div className="space-y-1.5">
-                {history.map((h: any) => (
+                {history.map((h: any, hi: number) => (
                   <div
-                    key={h.id}
+                    key={h.id ?? hi}
                     className="flex items-start gap-2 rounded-xl border border-line px-3 py-2 text-[10.5px]"
                   >
                     <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />

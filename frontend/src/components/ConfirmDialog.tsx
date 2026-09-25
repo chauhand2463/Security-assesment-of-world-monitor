@@ -34,9 +34,17 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
     };
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevMainOverflow = document.getElementById('main')?.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.getElementById('main')?.style.setProperty('overflow', 'hidden');
     window.addEventListener('keydown', onKey);
     requestAnimationFrame(() => cancelRef.current?.focus());
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prevBodyOverflow;
+      document.getElementById('main')?.style.setProperty('overflow', prevMainOverflow ?? '');
+      window.removeEventListener('keydown', onKey);
+    };
   }, [open, onCancel]);
 
   if (!open) return null;
@@ -51,7 +59,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         onClick={() => { if (!busy) onCancel(); }}
         className="overlay absolute inset-0 cursor-default"
       />
-      <div className="relative w-full max-w-sm rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-float)]">
+      <div className="relative z-10 w-full max-w-sm rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-float)]">
         <div className="flex items-start gap-3">
           <span
             className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
