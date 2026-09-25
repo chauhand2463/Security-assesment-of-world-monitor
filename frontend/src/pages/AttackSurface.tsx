@@ -10,8 +10,18 @@ import {
   ScanSearch,
   Database,
   Filter,
+  Zap,
 } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
+import {
+  motion,
+  AnimatePresence,
+  useReducedMotion,
+  useMotionValue,
+  useTransform,
+  animate,
+  useInView,
+} from 'framer-motion';
 import { apiResult } from '../api';
 import type { SurfaceSnapshot, SurfaceEndpoint, SurfaceParameter } from '../api';
 import { PageHeader } from '../components/PageHeader';
@@ -28,6 +38,53 @@ import { MonospaceValue } from '../components/MonospaceValue';
 import { UrlValue } from '../components/UrlValue';
 import { relativeTime, formatDateTime } from '../components/format';
 
+/* ─── Stagger presets ─── */
+const stagger = {
+  hidden: {},
+  show: { transition: { staggerChildren: 0.06, delayChildren: 0.08 } },
+};
+const fadeUp = {
+  hidden: { opacity: 0, y: 18 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] } },
+};
+const fadeIn = {
+  hidden: { opacity: 0 },
+  show: { opacity: 1, transition: { duration: 0.45, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] } },
+};
+const scaleIn = {
+  hidden: { opacity: 0, scale: 0.92 },
+  show: { opacity: 1, scale: 1, transition: { duration: 0.5, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] } },
+};
+
+/* ─── Animated counter hook ─── */
+function useAnimatedCounter(target: number, duration = 1.2) {
+  const motionVal = useMotionValue(0);
+  const rounded = useTransform(motionVal, (v) => Math.round(v));
+  const [display, setDisplay] = useState(0);
+  const ref = useRef<HTMLParagraphElement>(null);
+  const isInView = useInView(ref, { once: true, margin: '-40px' });
+  const reduce = useReducedMotion();
+
+  useEffect(() => {
+    if (!isInView) return;
+    if (reduce) {
+      setDisplay(target);
+      return;
+    }
+    const controls = animate(motionVal, target, {
+      duration,
+      ease: [0.22, 1, 0.36, 1],
+    });
+    const unsub = rounded.on('change', (v) => setDisplay(v));
+    return () => {
+      controls.stop();
+      unsub();
+    };
+  }, [target, isInView, reduce, motionVal, rounded, duration]);
+
+  return { display, ref };
+}
+
 export const AttackSurface: React.FC = () => {
   const [scanId, setScanId] = useState<number | null>(null);
   const [surface, setSurface] = useState<SurfaceSnapshot | null>(null);
@@ -42,6 +99,8 @@ export const AttackSurface: React.FC = () => {
   const [selectedParameter, setSelectedParameter] = useState<SurfaceParameter | null>(null);
   const [lastEndpoint, setLastEndpoint] = useState<SurfaceEndpoint | null>(null);
   const [lastParameter, setLastParameter] = useState<SurfaceParameter | null>(null);
+
+  const reduce = useReducedMotion();
 
   useEffect(() => {
     if (selectedEndpoint) setLastEndpoint(selectedEndpoint);
@@ -176,14 +235,24 @@ export const AttackSurface: React.FC = () => {
           }
         />
       ) : loading && !surface ? (
-        <div className="space-y-4">
+        <motion.div
+          className="space-y-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.3 }}
+        >
           <SkeletonTable rows={3} cols={4} />
           <SkeletonPanel className="min-h-[220px]" />
-        </div>
+        </motion.div>
       ) : error && !surface ? (
-        <div className="rounded-2xl border border-critical/25 bg-critical/[0.05] px-5 py-8 text-center text-[12px] text-critical">
+        <motion.div
+          className="rounded-2xl border border-critical/25 bg-critical/[0.05] px-5 py-8 text-center text-[12px] text-critical"
+          initial={{ opacity: 0, scale: 0.96 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.4 }}
+        >
           {error}
-        </div>
+        </motion.div>
       ) : !surface ? (
         <EmptyState
           icon={<Radar className="h-4 w-4" aria-hidden="true" />}
@@ -192,59 +261,96 @@ export const AttackSurface: React.FC = () => {
         />
       ) : (
         <>
-          <div className="flex items-start gap-2.5 rounded-2xl border border-line bg-surface-2/60 p-3.5">
-            <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.5} aria-hidden="true" />
+          {/* ── Observation notice ── */}
+          <motion.div
+            initial={{ opacity: 0, y: 18 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] }}
+            className="group flex items-start gap-2.5 rounded-2xl border border-line bg-surface-2/60 p-3.5 transition-colors duration-500 hover:border-accent/20 hover:bg-accent/[0.02]"
+          >
+            <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent transition-transform duration-500 group-hover:scale-110" strokeWidth={1.5} aria-hidden="true" />
             <p className="text-[11px] leading-relaxed text-muted">
               Observation-based only. Methods are never inferred from URLs and parameter values / credential
               material are never surfaced — you see names, existence shapes, and provenance.
             </p>
+          </motion.div>
+
+          {/* ── Stats tiles ── */}
+          <div className="relative grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+            {/* Subtle radar sweep behind tiles */}
+            {!reduce && (
+              <div
+                className="pointer-events-none absolute -inset-6 -z-10 opacity-30"
+                aria-hidden="true"
+              >
+                <div className="radar-sweep absolute inset-0 rounded-full" />
+              </div>
+            )}
+            <AnimatedTile icon={<ScanSearch className="h-3 w-3" />} label="Endpoints observed" value={surface.endpoint_count} index={0} />
+            <AnimatedTile icon={<ShieldCheck className="h-3 w-3" />} label="Endpoints assessed" value={surface.coverage.endpoints_assessed} accent index={1} />
+            <AnimatedTile icon={<Fingerprint className="h-3 w-3" />} label="Parameters observed" value={surface.parameter_count} index={2} />
+            <AnimatedTile icon={<Globe className="h-3 w-3" />} label="Hosts observed" value={ctx?.host_count ?? 0} index={3} />
+            <AnimatedTile icon={<Zap className="h-3 w-3" />} label="Discovery assets" value={surface.api_documents.length + surface.script_assets.length} index={4} />
           </div>
 
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-            <Tile label="Endpoints observed" value={surface.endpoint_count} />
-            <Tile label="Endpoints assessed" value={surface.coverage.endpoints_assessed} accent />
-            <Tile label="Parameters observed" value={surface.parameter_count} />
-            <Tile label="Hosts observed" value={ctx?.host_count ?? 0} />
-            <Tile label="Discovery assets" value={surface.api_documents.length + surface.script_assets.length} />
-          </div>
-
+          {/* ── Coverage section ── */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <section className="panel p-5">
+            <motion.section
+              initial={{ opacity: 0, scale: 0.92 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              viewport={{ once: true, margin: '-40px' }}
+              transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] }}
+              className="panel group relative overflow-hidden p-5"
+            >
+              <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-br from-accent/[0.04] via-transparent to-transparent opacity-0 transition-opacity duration-700 group-hover:opacity-100" />
               <SectionHeader
                 title="Endpoint coverage"
                 icon={<ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />}
                 meta={`${surface.coverage.endpoints_assessed}/${surface.coverage.endpoints_total} assessed`}
               />
               <div className="mt-3">
-                <CoverageBar
+                <AnimatedCoverageBar
                   done={surface.coverage.endpoints_assessed}
                   total={surface.coverage.endpoints_total}
-                  tone="bg-accent"
+                  tone="accent"
                 />
               </div>
               <p className="mt-2.5 text-[10px] leading-relaxed text-faint">{surface.coverage.note}</p>
-            </section>
-            <section className="panel p-5">
+            </motion.section>
+            <motion.section
+              initial={{ opacity: 0, scale: 0.92 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              viewport={{ once: true, margin: '-40px' }}
+              transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] as [number, number, number, number], delay: 0.08 }}
+              className="panel group relative overflow-hidden p-5"
+            >
+              <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-br from-high/[0.04] via-transparent to-transparent opacity-0 transition-opacity duration-700 group-hover:opacity-100" />
               <SectionHeader
                 title="Parameter coverage"
                 icon={<Fingerprint className="h-3.5 w-3.5" aria-hidden="true" />}
                 meta={`${surface.coverage.parameters_assessed}/${surface.coverage.parameters_total} assessed`}
               />
               <div className="mt-3">
-                <CoverageBar
+                <AnimatedCoverageBar
                   done={surface.coverage.parameters_assessed}
                   total={surface.coverage.parameters_total}
-                  tone="bg-high"
+                  tone="high"
                 />
               </div>
               <p className="mt-2.5 text-[10px] leading-relaxed text-faint">
                 Assessed where the owning endpoint has executed/validated/failed assessment tests.
               </p>
-            </section>
+            </motion.section>
           </div>
 
-          {/* Context */}
-          <section className="panel overflow-hidden">
+          {/* ── Context ── */}
+          <motion.section
+            initial={{ opacity: 0, y: 18 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: '-40px' }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] }}
+            className="panel overflow-hidden"
+          >
             <div className="px-5 pt-5 pb-3">
               <SectionHeader
                 title="Observed context"
@@ -257,41 +363,22 @@ export const AttackSurface: React.FC = () => {
                 <p className="text-[11px] text-faint">No host context persisted for this assessment.</p>
               ) : (
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
-                  {ctx.hosts.slice(0, 24).map((h) => (
-                    <div key={h.host} className="rounded-xl border border-line bg-surface-2/60 px-3 py-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="mono-cell truncate text-[11.5px] text-text">{h.host}</span>
-                        <span className="mono-cell flex shrink-0 gap-1 text-[9.5px] text-faint">
-                          {h.ports.length > 0 ? h.ports.join('/') : '—'}
-                        </span>
-                      </div>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                        {h.schemes.map((scheme) => (
-                          <span key={scheme} className="mono-cell rounded-md border border-line px-1.5 py-0.5 text-[9px] text-muted">
-                            {scheme}
-                          </span>
-                        ))}
-                        {h.kinds.slice(0, 4).map((kind) => (
-                          <span key={kind} className="mono-cell rounded-md border border-accent/30 bg-accent/5 px-1.5 py-0.5 text-[9px] text-accent">
-                            {kind}
-                          </span>
-                        ))}
-                        {h.kinds.length > 4 && (
-                          <span className="mono-cell text-[9px] text-faint">+{h.kinds.length - 4}</span>
-                        )}
-                      </div>
-                      <p className="mt-1.5 mono-cell text-[8.5px] text-faint">
-                        first {relativeTime(h.first_seen)} · last {relativeTime(h.last_seen)}
-                      </p>
-                    </div>
+                  {ctx.hosts.slice(0, 24).map((h, i) => (
+                    <HostCard key={h.host} host={h} index={i} />
                   ))}
                 </div>
               )}
             </div>
-          </section>
+          </motion.section>
 
-          {/* Filter toolbar */}
-          <div className="flex flex-wrap items-center gap-2.5">
+          {/* ── Filter toolbar ── */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true, margin: '-20px' }}
+            transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] }}
+            className="flex flex-wrap items-center gap-2.5"
+          >
             <Filter className="h-3.5 w-3.5 text-faint" strokeWidth={1.5} aria-hidden="true" />
             <label className="flex items-center gap-2 text-[10.5px] text-faint">
               <span className="uppercase tracking-wider">Scheme</span>
@@ -308,7 +395,7 @@ export const AttackSurface: React.FC = () => {
                 ))}
               </select>
             </label>
-            <div className="flex items-center gap-1 rounded-full border border-line p-0.5">
+            <div className="relative flex items-center gap-1 rounded-full border border-line p-0.5">
               {(
                 [
                   ['all', 'All'],
@@ -320,22 +407,42 @@ export const AttackSurface: React.FC = () => {
                   key={key}
                   type="button"
                   onClick={() => setAssessedFilter(key)}
-                  className={`rounded-full px-3 py-1 text-[10.5px] transition-colors duration-500 ease-spring ${
-                    assessedFilter === key ? 'bg-accent text-[#0a0a08]' : 'text-faint hover:text-text'
+                  className={`relative z-10 rounded-full px-3 py-1 text-[10.5px] transition-colors duration-300 ${
+                    assessedFilter === key ? 'text-[#0a0a08]' : 'text-faint hover:text-text'
                   }`}
                   aria-pressed={assessedFilter === key}
                 >
+                  {assessedFilter === key && (
+                    <motion.span
+                      layoutId="filter-pill"
+                      className="absolute inset-0 rounded-full bg-accent"
+                      style={{ zIndex: -1 }}
+                      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                    />
+                  )}
                   {label}
                 </button>
               ))}
             </div>
-            <span className="mono-cell ml-auto text-[10px] text-faint">
+            <motion.span
+              key={`${filteredEndpoints.length}-${filteredParameters.length}`}
+              className="mono-cell ml-auto text-[10px] text-faint"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3 }}
+            >
               {filteredEndpoints.length} endpoints · {filteredParameters.length} parameters
-            </span>
-          </div>
+            </motion.span>
+          </motion.div>
 
-          {/* Endpoints */}
-          <section className="panel overflow-hidden">
+          {/* ── Endpoints ── */}
+          <motion.section
+            initial={{ opacity: 0, y: 18 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: '-40px' }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] }}
+            className="panel overflow-hidden"
+          >
             <div className="px-5 pt-5 pb-2">
               <SectionHeader
                 title={`Observed endpoints (${filteredEndpoints.length})`}
@@ -414,10 +521,16 @@ export const AttackSurface: React.FC = () => {
                 },
               ]}
             />
-          </section>
+          </motion.section>
 
-          {/* Parameters */}
-          <section className="panel overflow-hidden">
+          {/* ── Parameters ── */}
+          <motion.section
+            initial={{ opacity: 0, y: 18 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: '-40px' }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] }}
+            className="panel overflow-hidden"
+          >
             <div className="px-5 pt-5 pb-2">
               <SectionHeader
                 title={`Observed parameters (${filteredParameters.length})`}
@@ -492,22 +605,36 @@ export const AttackSurface: React.FC = () => {
                 },
               ]}
             />
-          </section>
+          </motion.section>
 
-          {/* Discovery assets */}
+          {/* ── Discovery assets ── */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <DiscoveryPanel
-              title={`API documents (${surface.api_documents.length})`}
-              icon={<FileJson className="h-3.5 w-3.5" aria-hidden="true" />}
-              items={surface.api_documents}
-              empty="No OpenAPI documents observed — JSON documents may be parsed into endpoints."
-            />
-            <DiscoveryPanel
-              title={`Script assets (${surface.script_assets.length})`}
-              icon={<FileCode2 className="h-3.5 w-3.5" aria-hidden="true" />}
-              items={surface.script_assets}
-              empty="No script assets observed."
-            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              viewport={{ once: true, margin: '-40px' }}
+              transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] }}
+            >
+              <DiscoveryPanel
+                title={`API documents (${surface.api_documents.length})`}
+                icon={<FileJson className="h-3.5 w-3.5" aria-hidden="true" />}
+                items={surface.api_documents}
+                empty="No OpenAPI documents observed — JSON documents may be parsed into endpoints."
+              />
+            </motion.div>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              viewport={{ once: true, margin: '-40px' }}
+              transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] as [number, number, number, number], delay: 0.08 }}
+            >
+              <DiscoveryPanel
+                title={`Script assets (${surface.script_assets.length})`}
+                icon={<FileCode2 className="h-3.5 w-3.5" aria-hidden="true" />}
+                items={surface.script_assets}
+                empty="No script assets observed."
+              />
+            </motion.div>
           </div>
         </>
       )}
@@ -688,6 +815,10 @@ export const AttackSurface: React.FC = () => {
   );
 };
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Sub-components — upgraded with animations
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 const AssessmentBadge: React.FC<{ status: string }> = ({ status }) => {
   const s = (status || '').toLowerCase();
   if (s === 'executed' || s === 'validated') {
@@ -699,13 +830,144 @@ const AssessmentBadge: React.FC<{ status: string }> = ({ status }) => {
   return <StatusBadge status={s} />;
 };
 
-const Tile: React.FC<{ label: string; value: number; accent?: boolean }> = ({ label, value, accent }) => (
-  <div className="panel p-5">
-    <p className="eyebrow mb-1.5">{label}</p>
-    <p className={`tnum text-[26px] font-semibold leading-none tracking-tight ${accent ? 'text-accent' : 'text-text'}`}>
-      {value}
+/* ── Animated stat tile ── */
+const AnimatedTile: React.FC<{
+  label: string;
+  value: number;
+  accent?: boolean;
+  icon: React.ReactNode;
+  index: number;
+}> = ({ label, value, accent, icon, index }) => {
+  const { display, ref } = useAnimatedCounter(value);
+  return (
+    <motion.div
+      variants={fadeUp}
+      className="panel group relative overflow-hidden p-5 transition-shadow duration-500 hover:shadow-glow"
+      whileHover={{ y: -2, transition: { duration: 0.25 } }}
+    >
+      {/* Accent glow on hover */}
+      <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-br from-accent/[0.06] via-transparent to-transparent opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
+
+      <div className="mb-2 flex items-center gap-1.5">
+        <span className={`${accent ? 'text-accent' : 'text-faint'} transition-colors duration-300 group-hover:text-accent`}>
+          {icon}
+        </span>
+        <p className="eyebrow">{label}</p>
+      </div>
+      <p
+        ref={ref}
+        className={`tnum text-[28px] font-semibold leading-none tracking-tight ${accent ? 'text-accent' : 'text-text'}`}
+      >
+        {display}
+      </p>
+
+      {/* Subtle activity indicator line */}
+      <motion.div
+        className={`absolute bottom-0 left-0 h-[2px] ${accent ? 'bg-accent' : 'bg-line-strong'}`}
+        initial={{ width: '0%' }}
+        whileInView={{ width: '100%' }}
+        viewport={{ once: true }}
+        transition={{ duration: 0.8, delay: index * 0.08, ease: [0.22, 1, 0.36, 1] }}
+      />
+    </motion.div>
+  );
+};
+
+/* ── Animated coverage bar with glow ── */
+const AnimatedCoverageBar: React.FC<{
+  done: number;
+  total: number;
+  tone: 'accent' | 'high';
+}> = ({ done, total, tone }) => {
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const barRef = useRef<HTMLDivElement>(null);
+  const isInView = useInView(barRef, { once: true, margin: '-20px' });
+
+  const toneColors = {
+    accent: {
+      bar: 'bg-accent',
+      glow: 'rgba(232, 255, 61, 0.35)',
+      text: 'text-accent',
+    },
+    high: {
+      bar: 'bg-high',
+      glow: 'rgba(255, 143, 77, 0.35)',
+      text: 'text-high',
+    },
+  };
+
+  const c = toneColors[tone];
+
+  return (
+    <div ref={barRef}>
+      <div className="mb-1.5 flex items-center justify-between gap-3">
+        <span className="text-[10px] text-faint">Coverage</span>
+        <span className={`mono-cell text-[10px] ${c.text}`}>
+          {done}/{total} · {pct}%
+        </span>
+      </div>
+      <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-surface-2">
+        <motion.div
+          className={`h-full rounded-full ${c.bar}`}
+          initial={{ width: '0%' }}
+          animate={isInView ? { width: `${pct}%` } : { width: '0%' }}
+          transition={{ duration: 1.2, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
+          style={{
+            boxShadow: isInView ? `0 0 12px ${c.glow}, 0 0 4px ${c.glow}` : 'none',
+          }}
+        />
+        {/* Shimmer sweep on the bar */}
+        {isInView && pct > 0 && (
+          <motion.div
+            className="absolute inset-y-0 w-12 rounded-full"
+            style={{
+              background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent)',
+            }}
+            initial={{ left: '-3rem' }}
+            animate={{ left: '100%' }}
+            transition={{ duration: 1.6, delay: 0.8, ease: 'linear' }}
+          />
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ── Host card with hover lift ── */
+const HostCard: React.FC<{
+  host: { host: string; ports: number[]; schemes: string[]; kinds: string[]; first_seen: string | null; last_seen: string | null };
+  index: number;
+}> = ({ host: h, index }) => (
+  <motion.div
+    variants={fadeUp}
+    className="group rounded-xl border border-line bg-surface-2/60 px-3 py-2.5 transition-all duration-500 hover:border-accent/20 hover:bg-accent/[0.02] hover:shadow-[0_0_20px_-8px_rgba(232,255,61,0.12)]"
+    whileHover={{ y: -1, transition: { duration: 0.2 } }}
+  >
+    <div className="flex items-center justify-between gap-2">
+      <span className="mono-cell truncate text-[11.5px] text-text transition-colors duration-300 group-hover:text-accent">{h.host}</span>
+      <span className="mono-cell flex shrink-0 gap-1 text-[9.5px] text-faint">
+        {h.ports.length > 0 ? h.ports.join('/') : '—'}
+      </span>
+    </div>
+    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+      {h.schemes.map((scheme) => (
+        <span key={scheme} className="mono-cell rounded-md border border-line px-1.5 py-0.5 text-[9px] text-muted transition-colors duration-300 group-hover:border-accent/20">
+          {scheme}
+        </span>
+      ))}
+      {h.kinds.slice(0, 4).map((kind) => (
+        <span key={kind} className="mono-cell rounded-md border border-accent/30 bg-accent/5 px-1.5 py-0.5 text-[9px] text-accent">
+          {kind}
+        </span>
+      ))}
+      {h.kinds.length > 4 && (
+        <span className="mono-cell text-[9px] text-faint">+{h.kinds.length - 4}</span>
+      )}
+    </div>
+    <p className="mt-1.5 mono-cell text-[8.5px] text-faint">
+      first {relativeTime(h.first_seen)} · last {relativeTime(h.last_seen)}
     </p>
-  </div>
+  </motion.div>
 );
 
 const Field: React.FC<{ label: string; value: string; note?: string; accent?: boolean }> = ({
@@ -734,7 +996,8 @@ const DiscoveryPanel: React.FC<{
   }[];
   empty: string;
 }> = ({ title, icon, items, empty }) => (
-  <section className="panel overflow-hidden">
+  <section className="panel group relative overflow-hidden">
+    <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-br from-accent/[0.03] via-transparent to-transparent opacity-0 transition-opacity duration-700 group-hover:opacity-100" />
     <div className="flex items-center gap-2 px-5 pt-5 pb-3">
       <span className="text-accent">{icon}</span>
       <h2 className="text-[12.5px] font-semibold text-text">{title}</h2>
@@ -744,7 +1007,7 @@ const DiscoveryPanel: React.FC<{
         <p className="text-[11px] text-faint">{empty}</p>
       ) : (
         items.map((a) => (
-          <div key={a.id} className="rounded-xl border border-line bg-surface-2/60 px-3 py-2.5">
+          <div key={a.id} className="rounded-xl border border-line bg-surface-2/60 px-3 py-2.5 transition-colors duration-300 hover:border-accent/15">
             <div className="flex flex-wrap items-center gap-2">
               <span className="mono-cell min-w-0 flex-1 truncate text-[10.5px] text-text">{a.url}</span>
               <span className="mono-cell shrink-0 text-[9px] text-faint">#{a.id}</span>
