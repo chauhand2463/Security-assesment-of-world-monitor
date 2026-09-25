@@ -792,26 +792,51 @@ def get_scan_assessment_plan(scan_id: int, user: User = Depends(get_current_user
 @router.get("/{scan_id}/timeline")
 def get_scan_timeline(scan_id: int, user: User = Depends(get_current_user),
                       db: Session = Depends(get_db)):
-    """Phase 12: chronological surface-discovery timeline for a scan."""
-    from app.orchestration import events as ev
+    """Chronological evidence timeline for a scan (every typed event).
 
+    Each item carries the raw ``ScanEvent.data`` plus convenience fields
+    (``source``/``target``/``status``/``reference``) derived defensively from
+    the actual JSON keys present on that row -- nothing is assumed about an
+    event shape that is not there.  ``reference`` points at the persisted
+    object an event was emitted for (observation / asset / finding /
+    assessment-test / execution id) so the UI can link back to it.
+    """
     get_owned_scan(db, user, scan_id)
     rows = (
         db.query(ScanEvent)
-        .filter(ScanEvent.scan_id == scan_id,
-                ScanEvent.event_type.in_((ev.EVENT_ENDPOINT, ev.EVENT_PARAMETER,
-                                          ev.EVENT_ASSESSMENT, ev.EVENT_ASSET)))
+        .filter(ScanEvent.scan_id == scan_id)
         .order_by(ScanEvent.id.asc())
         .all()
     )
+
+    def _ref(data: dict) -> dict:
+        out: dict = {}
+        for key in ("observation_id", "asset_id", "finding_id", "assessment_test_id",
+                    "execution_id", "judgment_id", "verification_id", "id"):
+            if data.get(key) is not None:
+                out[key] = data[key]
+        return out
+
     return {
         "scan_id": scan_id,
         "items": [
             {
                 "id": r.id,
+                "seq": r.seq,
                 "type": r.event_type,
                 "data": r.data or {},
-                "created_at": r.created_at.isoformat(),
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "source": ((r.data or {}).get("source")
+                           or (r.data or {}).get("tool")
+                           or (r.data or {}).get("tool_name") or None),
+                "target": ((r.data or {}).get("subject")
+                           or (r.data or {}).get("url")
+                           or (r.data or {}).get("endpoint")
+                           or (r.data or {}).get("value") or None),
+                "status": ((r.data or {}).get("status")
+                           or (r.data or {}).get("stage")
+                           or (r.data or {}).get("state") or None),
+                "reference": _ref(r.data or {}),
             }
             for r in rows
         ],

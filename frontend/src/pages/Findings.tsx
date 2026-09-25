@@ -1,10 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
-import { ShieldAlert, X, Filter, FlaskConical, GitCommitHorizontal, ExternalLink } from 'lucide-react';
+import { useSearchParams, useNavigate, Link } from 'react-router-dom';
+import {
+  ShieldAlert,
+  Filter,
+  FlaskConical,
+  GitCommitHorizontal,
+  ShieldCheck,
+  ScanLine,
+} from 'lucide-react';
 import { apiFetch } from '../api';
 import { PageHeader } from '../components/PageHeader';
 import { DataTable } from '../components/DataTable';
 import { SeverityBadge } from '../components/SeverityBadge';
+import { DetailDrawer } from '../components/DetailDrawer';
+import { MonospaceValue } from '../components/MonospaceValue';
+import { CopyButton } from '../components/CopyButton';
+import { StatusBadge } from '../components/StatusBadge';
+import { SkeletonPanel } from '../components/Skeleton';
 import { formatDate, formatDateTime } from '../components/format';
 
 const TRIAGE_ACTIONS = [
@@ -241,7 +253,12 @@ export const Findings: React.FC = () => {
             key: 'status',
             label: 'Status',
             render: (r: Finding) => (
-              <span className="mono-cell text-[10px] text-muted capitalize">{(r.status || '').replace('_', ' ')}</span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="mono-cell text-[10px] text-muted capitalize">{(r.status || '').replace('_', ' ')}</span>
+                {r.state && r.state !== r.status && (
+                  <span className="chip !py-0.5 !text-[9px] !text-faint">{r.state}</span>
+                )}
+              </div>
             ),
           },
           {
@@ -261,7 +278,22 @@ export const Findings: React.FC = () => {
   );
 };
 
-const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated?: (id: number) => void }> = ({ finding, onClose, onUpdated }) => {
+/* ------------------------------------------------------------------------- */
+/* Evidence helpers — everything here renders persisted record fields only.  */
+/* ------------------------------------------------------------------------- */
+
+const integrityTone = (integrity: string): string => {
+  const v = (integrity || '').toLowerCase();
+  if (v.includes('match') || v === 'intact') return 'matched';
+  if (v.includes('mismatch') || v.includes('failed') || v.includes('break')) return 'mismatched';
+  return 'unverified';
+};
+
+const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated?: (id: number) => void }> = ({
+  finding,
+  onClose,
+  onUpdated,
+}) => {
   const [detail, setDetail] = useState<any | null>(null);
   const [error, setError] = useState('');
   const [triageAction, setTriageAction] = useState<string>('');
@@ -310,221 +342,324 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
     }
   };
 
-  const openAssetTab = () => {
+  const openScan = () => {
     onClose();
-    navigate(`/scans?scan=${finding.scan_id}`);
+    navigate(`/scans/${finding.scan_id}`);
   };
 
   const poc = detail?.proof_of_concept;
   const cvss = detail?.cvss || {};
   const history = Array.isArray(detail?.history) ? detail.history : [];
+  const evidence = Array.isArray(detail?.evidence) ? detail.evidence : [];
+  const verifications = Array.isArray(detail?.verifications) ? detail.verifications : [];
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="Finding detail">
-      <div className="flex-1 bg-black/60 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
-      <div className="glass flex h-full w-[560px] max-w-[94vw] flex-col overflow-hidden border-l border-line">
-        <div className="flex items-start justify-between gap-3 border-b border-line p-4">
-          <div className="min-w-0">
-            <div className="mb-2 flex items-center gap-2">
-              <SeverityBadge severity={finding.severity} />
-              <span className="mono-cell text-[10px] text-faint capitalize">{finding.status}</span>
-            </div>
-            <h2 className="text-[14px] font-semibold text-text">{finding.title}</h2>
-            <p className="mono-cell mt-1 truncate text-[10px] text-faint">
-              assessment #{finding.scan_id} · {finding.target || '—'}
-            </p>
-            <button
-              onClick={openAssetTab}
-              className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-full border border-line px-2.5 py-1 text-[10px] text-muted transition-colors duration-500 ease-spring hover:bg-white/[0.05] hover:text-accent"
-            >
-              <ExternalLink className="h-3 w-3" aria-hidden="true" />
-              Open affected assets
-            </button>
-          </div>
+    <DetailDrawer
+      open
+      onClose={onClose}
+      title={
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="mono-cell shrink-0 rounded-md border border-line px-1.5 py-0.5 text-[9px] text-faint">
+            F-{finding.id}
+          </span>
+          <span className="truncate">{finding.title}</span>
+        </span>
+      }
+      footer={
+        <>
           <button
-            onClick={onClose}
-            className="rounded-full p-1.5 text-muted transition-colors duration-500 ease-spring hover:bg-white/[0.05] hover:text-text"
-            aria-label="Close"
+            onClick={openScan}
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11px] text-muted transition-colors duration-500 ease-spring hover:border-line-strong hover:text-text"
           >
-            <X className="h-4 w-4" strokeWidth={1.5} />
+            <ScanLine className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
+            Open assessment
           </button>
-        </div>
+          <CopyButton value={`#${finding.id} ${finding.title}`} label="Copy finding ref" />
+        </>
+      }
+    >
+      {error ? (
+        <p className="text-[11.5px] text-critical">{error}</p>
+      ) : !detail ? (
+        <SkeletonPanel className="min-h-[420px]" />
+      ) : (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <SeverityBadge severity={finding.severity} />
+            <StatusBadge status={finding.status} />
+            {finding.state && finding.state !== finding.status && (
+              <span className="mono-cell rounded-full border border-line px-2 py-1 text-[10px] text-faint">
+                state: {finding.state}
+              </span>
+            )}
+            {detail.verification_state && (
+              <span className="mono-cell rounded-full border border-accent/30 bg-accent/5 px-2 py-1 text-[10px] text-accent">
+                {detail.verification_state}
+              </span>
+            )}
+          </div>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-[11.5px]">
-          {error && <p className="text-critical">{error}</p>}
-          {!detail && !error && <p className="text-faint">Loading…</p>}
-          {detail && (
-            <>
+          <div className="grid grid-cols-2 gap-3">
+            <KV label="Category" value={detail.category || '—'} mono />
+            <KV label="Component" value={detail.affected_component || '—'} mono />
+            <KV label="Endpoint" value={detail.endpoint || '—'} mono />
+            <KV label="Parameter" value={detail.parameter || '—'} mono />
+            <KV label="OWASP" value={detail.owasp || '—'} />
+            <KV label="CWE" value={detail.cwe ? `CWE-${detail.cwe}` : '—'} mono />
+            {detail.source_test && <KV label="Source test" value={detail.source_test} mono />}
+            {detail.source_tool && <KV label="Source tool" value={detail.source_tool} mono />}
+          </div>
+
+          {(cvss.vector || cvss.score != null) && (
+            <div>
+              <p className="eyebrow mb-1.5">CVSS</p>
               <div className="grid grid-cols-2 gap-3">
-                <KV label="Category" value={detail.category || '—'} mono />
-                <KV label="Component" value={detail.affected_component || '—'} mono />
-                <KV label="Endpoint" value={detail.endpoint || '—'} mono />
-                <KV label="Parameter" value={detail.parameter || '—'} mono />
-                <KV label="OWASP" value={detail.owasp || '—'} />
-                <KV label="CWE" value={detail.cwe ? `CWE-${detail.cwe}` : '—'} mono />
+                <KV label="Score / version" value={cvss.score != null ? `${cvss.score}${cvss.version ? ` (v${cvss.version})` : ''}` : '—'} mono />
+                <KV label="Vector" value={cvss.vector || '—'} mono />
               </div>
-
-              {(cvss.vector || cvss.score != null) && (
-                <div>
-                  <p className="eyebrow mb-1.5">CVSS</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <KV label="Score / version" value={cvss.score != null ? `${cvss.score}${cvss.version ? ` (v${cvss.version})` : ''}` : '—'} mono />
-                    <KV label="Vector" value={cvss.vector || '—'} mono />
-                  </div>
-                </div>
-              )}
-
-              {detail.description && (
-                <div>
-                  <p className="eyebrow mb-1">Description</p>
-                  <p className="leading-relaxed text-muted">{detail.description}</p>
-                </div>
-              )}
-
-              {(detail.remediation || detail.remediation_details?.technical_fix) && (
-                <div>
-                  <p className="eyebrow mb-1">Recommended remediation</p>
-                  <p className="leading-relaxed text-accent">{detail.remediation || detail.remediation_details?.technical_fix}</p>
-                </div>
-              )}
-
-              {detail.validation_reason && (
-                <div>
-                  <p className="eyebrow mb-1">Deterministic validation</p>
-                  <p className="leading-relaxed text-muted">{detail.validation_reason}</p>
-                </div>
-              )}
-
-              {poc && poc.request && (
-                <div>
-                  <p className="eyebrow mb-1.5">Proof of concept</p>
-                  <div className="space-y-1 rounded-xl border border-line p-3 text-[10.5px]">
-                    <p className="mono-cell text-faint">
-                      {poc.request.method} {poc.request.endpoint || ''}
-                      {poc.request.parameter ? ` (param: ${poc.request.parameter})` : ''}
-                    </p>
-                    <p className="text-muted"><span className="text-faint">expected:</span> {poc.expected_behavior || '—'}</p>
-                    <p className="text-muted"><span className="text-faint">observed:</span> {poc.observed_behavior || '—'}</p>
-                  </div>
-                  {poc.steps_to_reproduce && (
-                    <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-xl border border-line bg-surface-2 p-3 font-mono text-[10px] text-muted">
-                      {poc.steps_to_reproduce}
-                    </pre>
-                  )}
-                </div>
-              )}
-
-              {Array.isArray(detail.evidence) && detail.evidence.length > 0 && (
-                <div>
-                  <p className="eyebrow mb-1.5">Evidence ({detail.evidence.length})</p>
-                  <div className="space-y-1.5">
-                    {detail.evidence.map((e: any) => (
-                      <div key={e.id} className="rounded-xl border border-line p-3 text-[10.5px]">
-                        <div className="mb-1 flex flex-wrap items-center gap-2">
-                          <FlaskConical className="h-3 w-3 text-accent" strokeWidth={1.5} aria-hidden="true" />
-                          <span className="mono-cell text-[10px] text-accent">{e.evidence_type}</span>
-                          <span className="mono-cell text-[10px] text-faint">{e.redaction_status}</span>
-                          <span className="mono-cell text-[10px] text-faint">{e.security_boundary}</span>
-                        </div>
-                        <p className="text-muted"><span className="text-faint">expected:</span> {e.expected || '—'}</p>
-                        <p className="text-muted"><span className="text-faint">actual:</span> {e.actual || '—'}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {!poc?.request && (!detail.evidence || detail.evidence.length === 0) && (
-                <div className="flex items-start gap-2 rounded-xl border border-line p-3 text-[10.5px] text-faint">
-                  <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.5} aria-hidden="true" />
-                  <span>No structured evidence or proof of concept is attached to this finding.</span>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-3">
-                <KV label="First seen" value={detail.first_seen ? formatDateTime(detail.first_seen) : '—'} />
-                <KV label="Last seen" value={detail.last_seen ? formatDateTime(detail.last_seen) : '—'} />
-              </div>
-
-              {/* Verdict history timeline */}
-              {history.length > 0 && (
-                <div>
-                  <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-text">
-                    <GitCommitHorizontal className="h-3.5 w-3.5 text-faint" aria-hidden="true" />
-                    Verdict history
-                  </p>
-                  <div className="space-y-1.5">
-                    {history.map((h: any) => (
-                      <div
-                        key={h.id}
-                        className="flex items-start gap-2 rounded-xl border border-line px-3 py-2 text-[10.5px]"
-                      >
-                        <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-                        <div className="min-w-0 flex-1">
-                          <p className="font-mono text-[10px] text-muted">
-                            {h.from_status} <span className="text-faint">→</span> {h.to_status}
-                            <span className="ml-2 text-faint">by {h.actor || 'system'}</span>
-                          </p>
-                          <p className="mt-0.5 text-faint">{h.reason || ''}</p>
-                          <p className="mt-0.5 text-[9.5px] text-faint">{h.created_at ? formatDateTime(h.created_at) : '—'}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Operator triage */}
-              <div className="rounded-xl border border-line p-3">
-                <p className="eyebrow mb-2">Operator triage</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {TRIAGE_ACTIONS.map((a) => (
-                    <button
-                      key={a.id}
-                      onClick={() => setTriageAction(triageAction === a.id ? '' : a.id)}
-                      className={`mono-cell cursor-pointer rounded-full border px-2.5 py-1 text-[10px] transition-colors duration-500 ease-spring ${
-                        triageAction === a.id
-                          ? 'border-accent/60 bg-accent/10 text-accent'
-                          : 'border-line text-faint hover:text-muted'
-                      }`}
-                      disabled={triageBusy}
-                    >
-                      {a.label}
-                    </button>
-                  ))}
-                </div>
-                {triageAction && (
-                  <div className="mt-2 space-y-2">
-                    <input
-                      type="text"
-                      value={triageReason}
-                      onChange={(e) => setTriageReason(e.target.value)}
-                      placeholder="Reason (optional, recorded in history)"
-                      className="w-full rounded-xl border border-line bg-bg px-3 py-2 text-[11px] text-text placeholder:text-faint/70 focus:border-accent/60 focus:outline-none"
-                    />
-                    {triageError && <p className="text-[10.5px] text-critical">{triageError}</p>}
-                    <button
-                      onClick={runTriage}
-                      disabled={triageBusy}
-                      className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1.5 text-[10.5px] text-accent transition-colors duration-500 ease-spring hover:bg-accent/20 disabled:opacity-50"
-                    >
-                      {triageBusy ? 'Applying…' : `Apply: ${TRIAGE_ACTIONS.find((x) => x.id === triageAction)?.label}`}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </>
+            </div>
           )}
+
+          {detail.description && (
+            <div>
+              <p className="eyebrow mb-1">Description</p>
+              <p className="leading-relaxed text-muted">{detail.description}</p>
+            </div>
+          )}
+
+          {(detail.remediation || detail.remediation_details?.technical_fix) && (
+            <div>
+              <p className="eyebrow mb-1">Recommended remediation</p>
+              <p className="leading-relaxed text-accent">{detail.remediation || detail.remediation_details?.technical_fix}</p>
+            </div>
+          )}
+
+          {detail.validation_reason && (
+            <div>
+              <p className="eyebrow mb-1">Deterministic validation</p>
+              <p className="leading-relaxed text-muted">{detail.validation_reason}</p>
+            </div>
+          )}
+
+          {poc && poc.request && (
+            <div>
+              <p className="eyebrow mb-1.5">Proof of concept</p>
+              <div className="space-y-1 rounded-xl border border-line p-3 text-[10.5px]">
+                <p className="mono-cell text-faint">
+                  {poc.request.method} {poc.request.endpoint || ''}
+                  {poc.request.parameter ? ` (param: ${poc.request.parameter})` : ''}
+                </p>
+                <p className="text-muted"><span className="text-faint">expected:</span> {poc.expected_behavior || '—'}</p>
+                <p className="text-muted"><span className="text-faint">observed:</span> {poc.observed_behavior || '—'}</p>
+              </div>
+              {poc.steps_to_reproduce && (
+                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-xl border border-line bg-surface-2 p-3 font-mono text-[10px] text-muted">
+                  {poc.steps_to_reproduce}
+                </pre>
+              )}
+            </div>
+          )}
+
+          {/* Evidence ledger */}
+          <div>
+            <p className="eyebrow mb-2">Evidence ledger ({evidence.length})</p>
+            {evidence.length === 0 ? (
+              <div className="flex items-start gap-2 rounded-xl border border-line p-3 text-[10.5px] text-faint">
+                <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.5} aria-hidden="true" />
+                <span>No structured evidence records are attached to this finding — it is a ledger/triage entry, not a
+                  verified issue.</span>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {evidence.map((e: any) => {
+                  const integrity = integrityTone(e.integrity);
+                  return (
+                    <div key={e.id} className="rounded-xl border border-line p-3 text-[10.5px]">
+                      <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                        <span className="mono-cell rounded-md border border-accent/30 bg-accent/5 px-1.5 py-0.5 text-[9.5px] text-accent">
+                          {e.evidence_type}
+                        </span>
+                        {e.observation_id != null && (
+                          <Link to={`/scans/${finding.scan_id}/timeline`} className="soft-link mono-cell text-[9.5px]">
+                            observation #{e.observation_id}
+                          </Link>
+                        )}
+                        <span
+                          className={`mono-cell rounded-md border px-1.5 py-0.5 text-[9px] ${
+                            integrity === 'matched'
+                              ? 'border-accent/30 bg-accent/[0.04] text-accent'
+                              : integrity === 'mismatched'
+                              ? 'border-critical/30 bg-critical/[0.05] text-critical'
+                              : 'border-line text-faint'
+                          }`}
+                        >
+                          integrity: {e.integrity || 'unverified'}
+                        </span>
+                        <span className="mono-cell rounded-md border border-line px-1.5 py-0.5 text-[9px] text-faint">
+                          {e.redaction_status}
+                        </span>
+                        {e.security_boundary && (
+                          <span className="mono-cell rounded-md border border-line px-1.5 py-0.5 text-[9px] text-faint">
+                            {e.security_boundary}
+                          </span>
+                        )}
+                        <span className="mono-cell rounded-md border border-line px-1.5 py-0.5 text-[9px] text-faint">
+                          #{e.id}
+                        </span>
+                      </div>
+                      <p className="text-muted"><span className="text-faint">expected:</span> {e.expected || '—'}</p>
+                      <p className="text-muted"><span className="text-faint">actual:</span> {e.actual || '—'}</p>
+                      {(e.original_size != null || e.captured_size != null) && (
+                        <p className="mt-1 mono-cell text-[9px] text-faint">
+                          captured {e.captured_size ?? '—'}B of {e.original_size ?? '—'}B
+                          {e.truncated ? ' · truncated' : ''}
+                        </p>
+                      )}
+                      {(e.request_hash || e.response_hash) && (
+                        <div className="mt-2 space-y-1 border-t border-line/60 pt-2">
+                          {e.request_hash && (
+                            <div className="flex items-center gap-2 text-[9.5px] text-faint">
+                              <span className="shrink-0">req hash</span>
+                              <MonospaceValue value={e.request_hash} copyable copyLabel="Copy request hash" className="text-[9px]" />
+                            </div>
+                          )}
+                          {e.response_hash && (
+                            <div className="flex items-center gap-2 text-[9.5px] text-faint">
+                              <span className="shrink-0">res hash</span>
+                              <MonospaceValue value={e.response_hash} copyable copyLabel="Copy response hash" className="text-[9px]" />
+                            </div>
+                          )}
+                          <p className="text-[9px] leading-relaxed text-faint">
+                            Hashes are of redacted capture bodies; `original_size` reflects the pre-redaction store and
+                            hash-free captures show as unverified.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Verifications */}
+          {verifications.length > 0 && (
+            <div>
+              <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-text">
+                <ShieldCheck className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+                Verifications ({verifications.length})
+              </p>
+              <div className="space-y-1.5">
+                {verifications.map((v: any) => (
+                  <div key={v.id} className="rounded-xl border border-line px-3 py-2 text-[10.5px]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="mono-cell text-[10px] text-muted">{v.method}</span>
+                      <StatusBadge status={v.status ?? 'unverified'} />
+                      {v.rule_id && <span className="mono-cell text-[9.5px] text-faint">{v.rule_id}</span>}
+                      <span className="mono-cell ml-auto text-[9.5px] text-faint">
+                        {v.created_at ? formatDateTime(v.created_at) : '—'}
+                      </span>
+                    </div>
+                    {v.condition && <p className="mt-1 mono-cell text-[10px] text-faint">condition: {v.condition}</p>}
+                    {v.reason && <p className="mt-1 text-[10px] leading-relaxed text-muted">{v.reason}</p>}
+                    {(v.observation_ids?.length ?? 0) > 0 && (
+                      <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[9.5px] text-faint">
+                        observations:
+                        {v.observation_ids.map((oid: number) => (
+                          <Link key={oid} to={`/scans/${finding.scan_id}/timeline`} className="soft-link">
+                            #{oid}
+                          </Link>
+                        ))}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <KV label="First seen" value={detail.first_seen ? formatDateTime(detail.first_seen) : '—'} />
+            <KV label="Last seen" value={detail.last_seen ? formatDateTime(detail.last_seen) : '—'} />
+          </div>
+
+          {/* Verdict history timeline */}
+          {history.length > 0 && (
+            <div>
+              <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-text">
+                <GitCommitHorizontal className="h-3.5 w-3.5 text-faint" aria-hidden="true" />
+                Verdict history
+              </p>
+              <div className="space-y-1.5">
+                {history.map((h: any) => (
+                  <div
+                    key={h.id}
+                    className="flex items-start gap-2 rounded-xl border border-line px-3 py-2 text-[10.5px]"
+                  >
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-mono text-[10px] text-muted">
+                        {h.from_status} <span className="text-faint">→</span> {h.to_status}
+                        <span className="ml-2 text-faint">by {h.actor || 'system'}</span>
+                      </p>
+                      <p className="mt-0.5 text-faint">{h.reason || ''}</p>
+                      <p className="mt-0.5 text-[9.5px] text-faint">{h.created_at ? formatDateTime(h.created_at) : '—'}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Operator triage */}
+          <div className="rounded-xl border border-line p-3">
+            <p className="eyebrow mb-2">Operator triage</p>
+            <div className="flex flex-wrap gap-1.5">
+              {TRIAGE_ACTIONS.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => setTriageAction(triageAction === a.id ? '' : a.id)}
+                  className={`mono-cell cursor-pointer rounded-full border px-2.5 py-1 text-[10px] transition-colors duration-500 ease-spring ${
+                    triageAction === a.id
+                      ? 'border-accent/60 bg-accent/10 text-accent'
+                      : 'border-line text-faint hover:text-muted'
+                  }`}
+                  disabled={triageBusy}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
+            {triageAction && (
+              <div className="mt-2 space-y-2">
+                <input
+                  type="text"
+                  value={triageReason}
+                  onChange={(e) => setTriageReason(e.target.value)}
+                  placeholder="Reason (optional, recorded in history)"
+                  className="w-full rounded-xl border border-line bg-bg px-3 py-2 text-[11px] text-text placeholder:text-faint/70 focus:border-accent/60 focus:outline-none"
+                />
+                {triageError && <p className="text-[10.5px] text-critical">{triageError}</p>}
+                <button
+                  onClick={runTriage}
+                  disabled={triageBusy}
+                  className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1.5 text-[10.5px] text-accent transition-colors duration-500 ease-spring hover:bg-accent/20 disabled:opacity-50"
+                >
+                  {triageBusy ? 'Applying…' : `Apply: ${TRIAGE_ACTIONS.find((x) => x.id === triageAction)?.label}`}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    </DetailDrawer>
   );
 };
 
 const KV: React.FC<{ label: string; value: string; mono?: boolean }> = ({ label, value, mono }) => (
-  <div>
+  <div className="min-w-0">
     <p className="eyebrow mb-0.5">{label}</p>
-    <p className={`break-words text-[11px] text-muted ${mono ? 'font-mono' : ''}`}>{value}</p>
+    <p className={`wrap-any break-words text-[11px] text-muted ${mono ? 'font-mono' : ''}`}>{value}</p>
   </div>
 );
 

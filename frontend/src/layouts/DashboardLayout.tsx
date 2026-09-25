@@ -19,6 +19,7 @@ import {
   ArrowLeft,
   Globe,
   Target,
+  CalendarClock,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 
@@ -46,6 +47,7 @@ const NAV_GROUPS = [
       { name: 'Assessments', path: '/scans', icon: ShieldCheck },
       { name: 'Findings', path: '/findings', icon: ShieldAlert },
       { name: 'Reports', path: '/reports', icon: FileText },
+      { name: 'Schedules', path: '/schedules', icon: CalendarClock },
     ],
   },
   {

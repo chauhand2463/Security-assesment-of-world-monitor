@@ -19,8 +19,40 @@ _NON_INVENTORY_KINDS = {"endpoint_out_of_scope", "wm_not_configured"}
 _ASSESSED_TEST_STATUSES = ("executed", "validated", "failed")
 
 
+def _default_port(scheme: str) -> int:
+    """Deterministic port for an observed URL when none is explicit."""
+    return 443 if scheme == "https" else 80
+
+
 def _iso(value: datetime.datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def _endpoint_assessment(db, scan_id: int) -> dict:
+    """Map normalized endpoint URL -> executed/validated/failed test summary.
+
+    Only AssessmentTest rows whose status is executed/validated/failed count;
+    ``planned``/``skipped`` tests never make an endpoint "assessed".  The
+    summary is deterministic (persisted statuses only) so the UI can answer
+    "was this endpoint actually assessed" without guessing.
+    """
+    from database.models import AssessmentTest
+
+    tests = (
+        db.query(AssessmentTest)
+        .filter(AssessmentTest.scan_id == scan_id,
+                AssessmentTest.status.in_(_ASSESSED_TEST_STATUSES))
+        .all()
+    )
+    agg: dict[str, dict] = {}
+    for test in tests:
+        url = normalize_endpoint(test.endpoint or "")
+        if not url:
+            continue
+        entry = agg.setdefault(url, {"statuses": {}, "tests": 0})
+        entry["statuses"][test.status] = entry["statuses"].get(test.status, 0) + 1
+        entry["tests"] += 1
+    return agg
 
 
 def endpoint_inventory(db, scan_id: int, *, limit: int = 500) -> list[dict]:
@@ -54,6 +86,7 @@ def endpoint_inventory(db, scan_id: int, *, limit: int = 500) -> list[dict]:
                 "url": endpoint,
                 "scheme": scheme,
                 "host": (parts.hostname or "").lower(),
+                "port": parts.port or _default_port(scheme),  # explicit or scheme default
                 "method": None,  # never inferred from an observed URL
                 "sources": [],
                 "kinds": [],
@@ -85,10 +118,15 @@ def endpoint_inventory(db, scan_id: int, *, limit: int = 500) -> list[dict]:
                 entry["parameters"].append(name)
 
     out = sorted(entries.values(), key=lambda e: (str(e["first_seen"] or ""), e["url"]))
+    assessed = _endpoint_assessment(db, scan_id)
     for item in out:
         item["parameter_count"] = len(item["parameters"])
         item["first_seen"] = _iso(item["first_seen"])
         item["last_seen"] = _iso(item["last_seen"])
+        detail = assessed.get(item["url"])
+        item["assessed"] = detail is not None
+        item["assessment_statuses"] = sorted(detail["statuses"]) if detail else []
+        item["assessment_tests"] = detail["tests"] if detail else 0
         del item["parameters"]
     return out[:limit]
 

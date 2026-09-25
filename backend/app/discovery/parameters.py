@@ -12,6 +12,7 @@ import datetime
 from urllib.parse import parse_qs, urlsplit
 
 from app.discovery.endpoints import endpoint_key, without_query
+from app.observations.normalize import normalize_endpoint as _normalize_endpoint
 
 # Kinds that carry an observed-but-refused out-of-scope subject; their subject
 # URLs must never enter the inventory (they were refused by the scope guard).
@@ -69,7 +70,7 @@ def parameter_inventory(db, scan_id: int, *, limit: int = 1000) -> list[dict]:
         return row.observed_at or row.created_at
 
     for row, subject in _parameter_rows(db, scan_id):
-        endpoint = without_query(subject)
+        endpoint = _normalize_endpoint(without_query(subject))
         if not endpoint:
             continue
         declared = (row.data_json or {}).get("parameter")
@@ -117,6 +118,13 @@ def parameter_inventory(db, scan_id: int, *, limit: int = 1000) -> list[dict]:
             str(e["parameter"]),
         ),
     )
+    from app.discovery.inventory import _endpoint_assessment
+
+    assessed = _endpoint_assessment(db, scan_id)
+    for item in out:
+        detail = assessed.get(item["endpoint"])
+        item["assessed"] = detail is not None
+        item["assessment_statuses"] = sorted(detail["statuses"]) if detail else []
     return out[:limit]
 
 

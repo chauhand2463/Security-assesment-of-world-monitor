@@ -167,4 +167,52 @@ def schedule_scans(schedule_id: int,
     ]
 
 
+@router.post("/{schedule_id}/run")
+def run_schedule_now(schedule_id: int,
+                     user: User = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Run a schedule immediately (operator-initiated, outside the tick).
+
+    Enqueues a fresh scan through the exact scheduled-run path with
+    ``trigger="run_now"``.  Never fabricates a run: it is refused with a 409
+    when the schedule's previous scan is still live, and with a 403 when the
+    target has drifted out of the project scope.
+    """
+    from app.execution.schedule_loop import _last_scan_still_live, trigger_schedule_now
+
+    row = db.query(ScanSchedule).filter(ScanSchedule.id == schedule_id).first()
+    if row is None or row.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Schedule not found.")
+
+    if _last_scan_still_live(db, row):
+        raise HTTPException(
+            status_code=409,
+            detail="Previous run for this schedule is still in progress.",
+        )
+
+    project = db.query(Project).filter(Project.id == row.project_id).first()
+    assets = (
+        db.query(Asset).filter(Asset.project_id == row.project_id).all()
+        if project else []
+    )
+    if project is None or not is_target_in_scope(row.target, project, assets):
+        raise HTTPException(
+            status_code=403,
+            detail="Target is outside the authorized scope for this project.",
+        )
+
+    scan_id = trigger_schedule_now(db, row)
+    if scan_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Scan could not be enqueued from this schedule.",
+        )
+    return {
+        "schedule_id": row.id,
+        "scan_id": scan_id,
+        "status": "queued",
+        "message": "Run enqueued from schedule.",
+    }
+
+
 __all__ = ["router"]

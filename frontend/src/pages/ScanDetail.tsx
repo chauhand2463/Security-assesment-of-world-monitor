@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   ArrowLeft,
   Activity,
@@ -257,13 +257,22 @@ export const ScanDetail: React.FC = () => {
             : 'Loading assessment detail…'
         }
         actions={
-          <button
-            onClick={() => navigate('/scans')}
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11.5px] text-muted transition-colors duration-500 ease-spring hover:bg-surface-2 hover:text-text"
-          >
-            <ArrowLeft className="w-3 h-3" aria-hidden="true" />
-            All assessments
-          </button>
+          <>
+            <Link
+              to={`/scans/${scanId}/timeline`}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-accent/40 bg-accent/10 px-3 py-1.5 text-[11.5px] text-accent transition-colors duration-500 ease-spring hover:bg-accent/20"
+            >
+              <Activity className="w-3 h-3" aria-hidden="true" />
+              Timeline
+            </Link>
+            <button
+              onClick={() => navigate('/scans')}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11.5px] text-muted transition-colors duration-500 ease-spring hover:bg-surface-2 hover:text-text"
+            >
+              <ArrowLeft className="w-3 h-3" aria-hidden="true" />
+              All assessments
+            </button>
+          </>
         }
       />
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Radar, AlertTriangle, Target, Network, ArrowRight, Footprints, Layers, Crosshair } from 'lucide-react';
+import { Radar, AlertTriangle, Target, Network, ArrowRight, Footprints, Layers, Crosshair, Info } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { apiFetch, getScanCoverage } from '../api';
 import type { SurfaceCoverage } from '../api';
@@ -88,6 +88,55 @@ export const Dashboard: React.FC = () => {
           </Link>
         }
       />
+
+      {/* Security posture hero — every figure is a persisted count, never an estimate */}
+      <Reveal delay={0}>
+        <section className="relative overflow-hidden rounded-2xl border border-accent/20 bg-gradient-to-br from-accent/[0.07] via-surface-2/40 to-transparent p-6">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div className="min-w-0 max-w-[52ch]">
+              <p className="eyebrow mb-2">Security posture</p>
+              <h2 className="display text-[20px] font-semibold leading-tight text-text">
+                Evidence-backed posture, derived only from persisted records
+              </h2>
+              <p className="mt-2 text-[11.5px] leading-relaxed text-muted">
+                Confirmed findings are validated against deterministic evidence; candidates await verification;
+                every observation is stored before any finding is derived. Totals come straight from the backend
+                aggregate — nothing on this dashboard is synthesized.
+              </p>
+            </div>
+            <div className="grid w-full grid-cols-2 gap-3 sm:w-auto sm:grid-cols-4">
+              <HeroStat
+                label="Confirmed findings"
+                value={agg?.confirmed_findings ?? 0}
+                note="evidence-validated"
+                tone="text-accent"
+                to="/findings"
+              />
+              <HeroStat
+                label="Candidates"
+                value={agg?.candidate_findings ?? 0}
+                note="awaiting verification"
+                tone="text-low"
+                to="/findings"
+              />
+              <HeroStat
+                label="Evidence records"
+                value={agg?.observation_count ?? 0}
+                note="persisted observations"
+                tone="text-text"
+                to="/coverage"
+              />
+              <HeroStat
+                label="Assessments run"
+                value={agg?.scans_total ?? scans.length}
+                note="persisted scan ledger"
+                tone="text-text"
+                to="/scans"
+              />
+            </div>
+          </div>
+        </section>
+      </Reveal>
 
       {/* Stat tiles */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -197,6 +246,11 @@ export const Dashboard: React.FC = () => {
               <h2 className="text-[12.5px] font-semibold text-text">Security Score Trend</h2>
               <span className="eyebrow">Last assessments</span>
             </div>
+            <p className="mb-4 flex items-start gap-2 text-[10px] leading-relaxed text-faint">
+              <Info className="mt-0.5 h-3 w-3 shrink-0" strokeWidth={1.5} aria-hidden="true" />
+              Scores are computed in the backend from confirmed (evidence-validated) findings only — starting at 100 and
+              deducting per evidence-backed issue. It is a findings-derived posture signal, not a coverage statistic.
+            </p>
             {loading ? (
               <Skeleton className="h-36 w-full" />
             ) : (summary?.score_history ?? []).length === 0 ? (
@@ -344,6 +398,7 @@ export const Dashboard: React.FC = () => {
                 {
                   key: 'score',
                   label: 'Score',
+                  headerClassName: 'cursor-help',
                   render: (s: any) => (
                     <span className="mono-cell text-muted">{s.security_score !== null ? `${s.security_score}/100` : '—'}</span>
                   ),
@@ -380,6 +435,22 @@ export const Dashboard: React.FC = () => {
     </div>
   );
 };
+
+const HeroStat: React.FC<{ label: string; value: number; note: string; tone: string; to: string }> = ({
+  label,
+  value,
+  note,
+  tone,
+  to,
+}) => (
+  <Link to={to} className="no-underline">
+    <div className="rounded-xl border border-line bg-surface/60 px-3.5 py-3 transition-colors duration-500 ease-spring hover:border-line-strong">
+      <p className="eyebrow mb-1.5">{label}</p>
+      <p className={`tnum text-[24px] font-semibold leading-none tracking-tight ${tone}`}>{value}</p>
+      <p className="mono-cell mt-1.5 text-[9px] text-faint">{note}</p>
+    </div>
+  </Link>
+);
 
 const StatTile: React.FC<{
   label: string;

@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Cpu, CheckCircle2, Ban, Activity, RotateCw } from 'lucide-react';
-import { apiFetch } from '../api';
+import { Cpu, CheckCircle2, Ban, Activity, RotateCw, History } from 'lucide-react';
+import { apiFetch, getToolsExecutions } from '../api';
+import type { ToolExecutionLedger, ToolExecutionSummary } from '../api';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
 import { Skeleton } from '../components/Skeleton';
+import { DataTable } from '../components/DataTable';
+import { relativeTime } from '../components/format';
 
 const CATEGORY_LABELS: Record<string, string> = {
   recon: 'Recon',
@@ -18,14 +21,20 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export const ToolHealth: React.FC = () => {
   const [data, setData] = useState<{ tools: any[]; simulation_mode: boolean } | null>(null);
+  const [ledger, setLedger] = useState<ToolExecutionLedger | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  const loadExecutions = useCallback(async () => {
+    const rows = await getToolsExecutions();
+    setLedger(rows);
+  }, []);
 
   const fetchInventory = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const res = await apiFetch('/tools/inventory');
+      const [res, exec] = await Promise.all([apiFetch('/tools/inventory'), loadExecutions()]);
       if (res.ok) {
         setData(await res.json());
       } else {
@@ -37,7 +46,7 @@ export const ToolHealth: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadExecutions]);
 
   const reprobe = useCallback(async () => {
     setLoading(true);
@@ -46,7 +55,7 @@ export const ToolHealth: React.FC = () => {
       // Re-merge freshly installed PATH entries before re-probing so a tool
       // installed after the backend started becomes visible without recovery.
       await apiFetch('/tools/refresh', { method: 'POST' });
-      const res = await apiFetch('/tools/inventory');
+      const [res, exec] = await Promise.all([apiFetch('/tools/inventory'), loadExecutions()]);
       if (res.ok) {
         setData(await res.json());
       } else {
@@ -58,7 +67,7 @@ export const ToolHealth: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadExecutions]);
 
   useEffect(() => {
     fetchInventory();
@@ -110,6 +119,113 @@ export const ToolHealth: React.FC = () => {
               loading={loading}
             />
           </div>
+
+          {ledger && (
+            <section className="panel overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-5 pb-3">
+                <h2 className="flex items-center gap-2 text-[12.5px] font-semibold text-text">
+                  <History className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+                  Execution summary
+                </h2>
+                <span className="mono-cell text-[10px] text-faint">
+                  {ledger.totals.executions} execution rows · across all assessments
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5 px-5 pb-4">
+                <LedgerChip label="completed" value={ledger.totals.completed} tone="text-accent border-accent/30 bg-accent/[0.05]" />
+                <LedgerChip label="failed" value={ledger.totals.failed} tone="text-critical border-critical/30 bg-critical/[0.05]" />
+                <LedgerChip label="timeout" value={ledger.totals.timeout} tone="text-medium border-medium/30 bg-medium/[0.05]" />
+                <LedgerChip label="not installed" value={ledger.totals.not_installed} tone="text-warn border-medium/30 bg-medium/[0.05]" />
+                <LedgerChip label="parse failed" value={ledger.totals.parse_failed} tone="text-warn border-medium/30 bg-medium/[0.05]" />
+                <LedgerChip label="skipped" value={ledger.totals.skipped} tone="text-faint border-line" />
+                <LedgerChip label="cancelled" value={ledger.totals.cancelled} tone="text-faint border-line" />
+                <LedgerChip label="observations produced" value={ledger.totals.observations_produced} tone="text-accent border-accent/30 bg-accent/[0.05]" />
+              </div>
+              <DataTable
+                rows={ledger.tools}
+                keyField={(t: ToolExecutionSummary) => t.tool}
+                empty={{
+                  title: 'No tool executions yet',
+                  description: 'Tool execution rows appear once assessments have run and persisted their tool runs.',
+                }}
+                columns={[
+                  {
+                    key: 'tool',
+                    label: 'Tool',
+                    render: (t: ToolExecutionSummary) => (
+                      <span className="mono-cell text-[11px] font-medium text-text">{t.tool}</span>
+                    ),
+                  },
+                  {
+                    key: 'category',
+                    label: 'Category',
+                    render: (t: ToolExecutionSummary) => (
+                      <span className="mono-cell text-[9.5px] text-faint">{t.category}</span>
+                    ),
+                  },
+                  {
+                    key: 'executions',
+                    label: 'Runs',
+                    render: (t: ToolExecutionSummary) => (
+                      <span className="mono-cell text-[10.5px] text-muted">{t.executions_total}</span>
+                    ),
+                  },
+                  {
+                    key: 'statuses',
+                    label: 'Outcomes',
+                    render: (t: ToolExecutionSummary) => (
+                      <div className="flex flex-wrap gap-1">
+                        {Object.entries(t.statuses ?? {}).map(([s, n]) => (
+                          <span
+                            key={s}
+                            className="mono-cell rounded-md border border-line px-1.5 py-0.5 text-[9px] text-faint"
+                            title={`${s}: ${n}`}
+                          >
+                            {s === 'completed'
+                              ? '✓'
+                              : s === 'failed'
+                              ? '✕'
+                              : s === 'cancelled'
+                              ? '⊘'
+                              : '•'}{' '}
+                            {n}
+                          </span>
+                        ))}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'obs',
+                    label: 'Obs produced',
+                    render: (t: ToolExecutionSummary) => (
+                      <span className="mono-cell text-[10px] text-muted">{t.observations_produced}</span>
+                    ),
+                  },
+                  {
+                    key: 'last_status',
+                    label: 'Last run',
+                    render: (t: ToolExecutionSummary) => (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {t.last_status ? <StatusBadge status={t.last_status} /> : <span className="text-[9.5px] text-faint">—</span>}
+                        <span className="mono-cell text-[9px] text-faint">{relativeTime(t.last_execution_at)}</span>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'scans',
+                    label: 'Scans',
+                    render: (t: ToolExecutionSummary) => (
+                      <span className="mono-cell text-[10px] text-faint">{t.scans_touched}</span>
+                    ),
+                  },
+                ]}
+              />
+              <p className="px-5 pt-3 pb-5 text-[10px] leading-relaxed text-faint">
+                Outcomes and produced-observation counts come from persisted `ToolExecution` rows — mirrored from the
+                Coverage page. Status totals are exact ledger counts, not estimates.
+              </p>
+            </section>
+          )}
 
           {data && (
             <div className="panel flex flex-wrap items-center gap-2.5 p-4 text-[11.5px] text-muted">
@@ -211,4 +327,10 @@ const Tile: React.FC<{ label: string; icon: React.ReactNode; value: number; load
       )}
     </div>
   </div>
+);
+
+const LedgerChip: React.FC<{ label: string; value: number; tone: string }> = ({ label, value, tone }) => (
+  <span className={`mono-cell rounded-md border px-2 py-1 text-[9.5px] ${tone}`}>
+    {label}: {value}
+  </span>
 );

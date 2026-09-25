@@ -1,19 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ChevronDown } from 'lucide-react';
-import { apiFetch } from '../api';
+import { getScanList } from '../api';
+import type { ScanRow } from '../api';
 import { Skeleton } from './Skeleton';
 
 interface ScanPickerProps {
   value: number | null;
   onChange: (scanId: number | null) => void;
   disabled?: boolean;
-}
-
-interface ScanRow {
-  id: number;
-  target: string;
-  status: string;
 }
 
 /** Dropdown of the user's assessments (newest first) for scan-scoped pages. */
@@ -24,25 +19,24 @@ export const ScanPicker: React.FC<ScanPickerProps> = ({ value, onChange, disable
 
   useEffect(() => {
     let alive = true;
-    apiFetch('/scans/list')
-      .then((res) => (res.ok ? res.json() : []))
-      .then((rows: ScanRow[]) => {
-        if (!alive) return;
-        setScans([...rows].sort((a, b) => b.id - a.id));
-        const param = searchParams.get('scan');
-        const preferred = param ? Number(param) : null;
-        const has = rows.some((s) => s.id === value);
-        if (!has) {
-          const pick = preferred && rows.some((s) => s.id === preferred)
-            ? preferred
-            : rows.length > 0
-            ? rows[0].id
-            : null;
-          onChange(pick);
-        }
-      })
-      .catch(() => {})
-      .finally(() => alive && setLoading(false));
+    void getScanList().then((rows) => {
+      if (!alive) return;
+      const list = rows ?? [];
+      setScans([...list].sort((a, b) => b.id - a.id));
+      const param = searchParams.get('scan');
+      const preferred = param ? Number(param) : null;
+      const has = list.some((s) => s.id === value);
+      if (!has) {
+        const pick = preferred && list.some((s) => s.id === preferred)
+          ? preferred
+          : list.length > 0
+          ? list[0].id
+          : null;
+        onChange(pick);
+      }
+    }).finally(() => {
+      if (alive) setLoading(false);
+    });
     return () => {
       alive = false;
     };
@@ -69,6 +63,7 @@ export const ScanPicker: React.FC<ScanPickerProps> = ({ value, onChange, disable
         value={value ?? ''}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}
+        aria-busy={loading}
         className="h-9 cursor-pointer appearance-none rounded-full border border-line bg-surface-2 py-1.5 pl-24 pr-9 text-[11.5px] text-text outline-none transition-[border-color,background-color] duration-500 ease-spring hover:border-line-strong focus:border-accent disabled:opacity-50"
         aria-label="Select assessment"
       >

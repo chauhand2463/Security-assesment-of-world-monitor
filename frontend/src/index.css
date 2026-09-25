@@ -37,6 +37,7 @@
   --color-critical: #ff5b5b;   /* verified critical findings only */
   --color-high: #ff8f4d;       /* verified high findings */
   --color-medium: #ffd64d;     /* medium / informational-adjacent */
+  --color-warn: #ffd64d;       /* warn == caution amber (same as medium) */
   --color-low: #8fb8ff;        /* low severity */
   --color-neutral: #8f9091;    /* informational severity */
 
@@ -289,6 +290,76 @@ body::after {
 .tnum-cell {
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
+}
+
+/* ============================================================================
+   Phase 14 hardening: overflow safety, stable focus, long-token handling.
+   No fabricated state: these are presentation guards only.
+   ========================================================================= */
+
+/* Every flex/grid participant that may hold long content can collapse
+   instead of blowing the row out of the viewport. */
+.minw-0 {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Long monospace tokens (URLs, paths, fingerprints, cwes) wrap instead of
+   forcing horizontal page scroll. */
+.wrap-any {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* The root shell must be allowed to shrink below content width. */
+#root {
+  min-width: 0;
+}
+
+/* Inline evidence links: underlined, accent-tinted, never text-shadowy. */
+.soft-link {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(232, 255, 61, 0.32);
+  transition: text-decoration-color 0.3s var(--ease-spring), color 0.3s var(--ease-spring);
+}
+.soft-link:hover {
+  text-decoration-color: var(--color-accent);
+  color: var(--color-accent-bright);
+}
+.soft-link:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Modal / drawer overlay chrome (dimmed scrim, still transparent enough to
+   keep the page legible around the panel). */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(4, 4, 4, 0.58);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* Compact dark scrollbars for dense mono panels. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 999px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* ---- Landing editorial textures / marquee ---- */

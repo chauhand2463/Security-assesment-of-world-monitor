@@ -55,8 +55,14 @@ def _last_scan_still_live(db, schedule) -> bool:
     return (scan.stage or "") not in _terminal_states()
 
 
-def _enqueue_from_schedule(db, schedule) -> int | None:
-    """Create + enqueue one scheduled scan row (returns new scan id)."""
+def _enqueue_from_schedule(db, schedule, *, trigger: str = "schedule") -> int | None:
+    """Create + enqueue one scheduled scan row (returns new scan id).
+
+    ``trigger`` records why the scan was created: ``schedule`` (recurrence
+    tick) or ``run_now`` (operator-initiated run of a schedule).  Both paths
+    share the exact enqueue behaviour, so a run_now scan is indistinguishable
+    from a tick scan in lifecycle, attempt ledger and SSE contract.
+    """
     from app.config import settings
     from app.core.auth import is_target_in_scope
     from app.agents import lifecycle
@@ -91,7 +97,7 @@ def _enqueue_from_schedule(db, schedule) -> int | None:
     db.add(scan)
     db.flush()
     scan.state = "created"
-    db.add(ScanAttempt(scan_id=scan.id, attempt_number=1, trigger="schedule",
+    db.add(ScanAttempt(scan_id=scan.id, attempt_number=1, trigger=trigger,
                        status="queued", created_at=now))
     # Seed the visible plan exactly like an interactive scan enqueue.
     from app.agents.workflow import _seed_progress
@@ -112,6 +118,31 @@ def _enqueue_from_schedule(db, schedule) -> int | None:
         db.commit()
         return None
     return scan.id
+
+
+def trigger_schedule_now(db, schedule) -> int | None:
+    """Operator "run now": enqueue a schedule's scan immediately.
+
+    Reuses the exact enqueue path as the scheduler tick (identical lifecycle,
+    attempt ledger and SSE contract) without advancing ``next_run_at``.  A run
+    is refused when the previous scan for this schedule is still live.  Returns
+    the new scan id, or None when the run could not start (out-of-scope target
+    or enqueue failure); the schedule's ``last_run_status`` records the reason.
+    """
+    if _last_scan_still_live(db, schedule):
+        logger.info("Schedule %s run-now skipped: previous run still live.",
+                    schedule.id)
+        return None
+
+    scan_id = _enqueue_from_schedule(db, schedule, trigger="run_now")
+    now = _utcnow()
+    schedule.last_run_at = now
+    if scan_id is not None:
+        schedule.last_run_status = "queued"
+        schedule.last_scan_id = scan_id
+    schedule.updated_at = now
+    db.commit()
+    return scan_id
 
 
 def scheduler_tick(db) -> int:
@@ -184,4 +215,5 @@ def start_scheduler() -> threading.Event:
     return stop_event
 
 
-__all__ = ["scheduler_tick", "next_run_at", "run_scheduler_loop", "start_scheduler"]
+__all__ = ["scheduler_tick", "next_run_at", "run_scheduler_loop", "start_scheduler",
+           "trigger_schedule_now"]
