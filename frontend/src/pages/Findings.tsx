@@ -132,18 +132,46 @@ export const Findings: React.FC = () => {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        {SEVERITIES.map((s) => (
-          <button
-            key={s}
-            onClick={() => setFilter('severity', severity === s ? '' : s)}
-            className={`panel p-4 text-left transition-colors duration-500 ease-spring ${
-              severity === s ? 'border-accent/40' : ''
-            }`}
-          >
-            <p className="eyebrow mb-1.5">{s}</p>
-            <p className="tnum text-[24px] font-semibold leading-none tracking-tight text-text">{counts[s]}</p>
-          </button>
-        ))}
+        {SEVERITIES.map((s) => {
+          const toneColor =
+            s === 'Critical'
+              ? 'text-critical'
+              : s === 'High'
+              ? 'text-high'
+              : s === 'Medium'
+              ? 'text-medium'
+              : s === 'Low'
+              ? 'text-low'
+              : 'text-neutral';
+          const dotColor =
+            s === 'Critical'
+              ? 'bg-critical'
+              : s === 'High'
+              ? 'bg-high'
+              : s === 'Medium'
+              ? 'bg-medium'
+              : s === 'Low'
+              ? 'bg-low'
+              : 'bg-neutral';
+          const isSelected = severity === s;
+          return (
+            <button
+              key={s}
+              onClick={() => setFilter('severity', isSelected ? '' : s)}
+              className={`panel relative overflow-hidden p-4 text-left transition-all duration-300 ${
+                isSelected
+                  ? 'border-accent/60 bg-accent/[0.04] shadow-[0_0_20px_rgba(232,255,61,0.08)]'
+                  : 'hover:border-line-strong'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <p className="eyebrow">{s}</p>
+                <span className={`h-2 w-2 rounded-full ${dotColor}`} />
+              </div>
+              <p className={`tnum text-[26px] font-semibold leading-none tracking-tight ${toneColor}`}>{counts[s]}</p>
+            </button>
+          );
+        })}
       </div>
 
       <div className="panel flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
@@ -271,9 +299,12 @@ export const Findings: React.FC = () => {
         ]}
       />
 
-      {selected && (
-        <FindingDrawer finding={selected} onClose={() => setSelected(null)} onUpdated={handleTriageUpdated} />
-      )}
+      <FindingDrawer
+        finding={selected}
+        open={selected !== null}
+        onClose={() => setSelected(null)}
+        onUpdated={handleTriageUpdated}
+      />
     </div>
   );
 };
@@ -308,11 +339,13 @@ const integrityLabel = (integrity: IntegrityObject | string | null | undefined):
   return integrity || 'unverified';
 };
 
-const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated?: (id: number) => void }> = ({
-  finding,
-  onClose,
-  onUpdated,
-}) => {
+const FindingDrawer: React.FC<{
+  finding: Finding | null;
+  open: boolean;
+  onClose: () => void;
+  onUpdated?: (id: number) => void;
+}> = ({ finding, open, onClose, onUpdated }) => {
+  const [activeFinding, setActiveFinding] = useState<Finding | null>(finding);
   const [detail, setDetail] = useState<any | null>(null);
   const [error, setError] = useState('');
   const [triageAction, setTriageAction] = useState<string>('');
@@ -322,25 +355,34 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
   const navigate = useNavigate();
 
   useEffect(() => {
+    if (finding) {
+      setActiveFinding(finding);
+    }
+  }, [finding]);
+
+  const currentFinding = finding || activeFinding;
+
+  useEffect(() => {
+    if (!currentFinding?.id || !open) return;
     let cancelled = false;
     setDetail(null);
     setError('');
     setTriageError('');
-    apiFetch(`/findings/${finding.id}`)
+    apiFetch(`/findings/${currentFinding.id}`)
       .then(async (res) => (res.ok ? res.json() : Promise.reject(await res.json().catch(() => null))))
       .then((data) => !cancelled && setDetail(data))
       .catch((err) => !cancelled && setError(err?.detail || 'Failed to load finding detail.'));
     return () => {
       cancelled = true;
     };
-  }, [finding.id]);
+  }, [currentFinding?.id, open]);
 
   const runTriage = async () => {
-    if (!triageAction) return;
+    if (!triageAction || !currentFinding) return;
     setTriageBusy(true);
     setTriageError('');
     try {
-      const res = await apiFetch(`/findings/${finding.id}/triage`, {
+      const res = await apiFetch(`/findings/${currentFinding.id}/triage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: triageAction, reason: triageReason || null }),
@@ -353,7 +395,7 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
       setTriageAction('');
       setTriageReason('');
       setDetail((prev: any) => (prev ? { ...prev, status: data.status, state: data.state } : prev));
-      onUpdated?.(finding.id);
+      onUpdated?.(currentFinding.id);
     } catch (err: any) {
       setTriageError(err.message || 'Triage failed.');
     } finally {
@@ -362,8 +404,9 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
   };
 
   const openScan = () => {
+    if (!currentFinding) return;
     onClose();
-    navigate(`/scans/${finding.scan_id}`);
+    navigate(`/scans/${currentFinding.scan_id}`);
   };
 
   const poc = detail?.proof_of_concept;
@@ -372,29 +415,31 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
   const evidence = Array.isArray(detail?.evidence) ? detail.evidence : [];
   const verifications = Array.isArray(detail?.verifications) ? detail.verifications : [];
 
+  if (!currentFinding) return null;
+
   return (
     <DetailDrawer
-      open
+      open={open}
       onClose={onClose}
       title={
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="mono-cell shrink-0 rounded-md border border-line px-1.5 py-0.5 text-[9px] text-faint">
-            F-{finding.id}
+        <span className="flex min-w-0 items-center gap-2.5">
+          <span className="mono-cell shrink-0 rounded-md border border-line bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-medium text-faint">
+            F-{currentFinding.id}
           </span>
-          <span className="truncate">{finding.title}</span>
+          <span className="truncate font-semibold text-text">{currentFinding.title}</span>
         </span>
       }
       footer={
-        <>
+        <div className="flex w-full items-center justify-between gap-3">
           <button
             onClick={openScan}
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11px] text-muted transition-colors duration-500 ease-spring hover:border-line-strong hover:text-text"
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-1.5 text-[11.5px] font-medium text-muted transition-colors hover:border-line-strong hover:bg-white/[0.04] hover:text-text"
           >
             <ScanLine className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
             Open assessment
           </button>
-          <CopyButton value={`#${finding.id} ${finding.title}`} label="Copy finding ref" />
-        </>
+          <CopyButton value={`#${currentFinding.id} ${currentFinding.title}`} label="Copy finding ref" />
+        </div>
       }
     >
       {error ? (
@@ -404,11 +449,11 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
       ) : (
         <div className="space-y-5">
           <div className="flex flex-wrap items-center gap-2">
-            <SeverityBadge severity={finding.severity} />
-            <StatusBadge status={finding.status} />
-            {finding.state && finding.state !== finding.status && (
-              <span className="mono-cell rounded-full border border-line px-2 py-1 text-[10px] text-faint">
-                state: {finding.state}
+            <SeverityBadge severity={currentFinding.severity} />
+            <StatusBadge status={currentFinding.status} />
+            {currentFinding.state && currentFinding.state !== currentFinding.status && (
+              <span className="mono-cell rounded-full border border-line bg-surface-2 px-2.5 py-1 text-[10px] text-faint">
+                state: {currentFinding.state}
               </span>
             )}
             {detail.verification_state && (
@@ -500,7 +545,7 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
                           {e.evidence_type}
                         </span>
                         {e.observation_id != null && (
-                          <Link to={`/scans/${finding.scan_id}/timeline`} className="soft-link mono-cell text-[9.5px]">
+                          <Link to={`/scans/${currentFinding.scan_id}/timeline`} className="soft-link mono-cell text-[9.5px]">
                             observation #{e.observation_id}
                           </Link>
                         )}
@@ -601,7 +646,7 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
                       <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[9.5px] text-faint">
                         observations:
                         {v.observation_ids.map((oid: number) => (
-                          <Link key={oid} to={`/scans/${finding.scan_id}/timeline`} className="soft-link">
+                          <Link key={oid} to={`/scans/${currentFinding.scan_id}/timeline`} className="soft-link">
                             #{oid}
                           </Link>
                         ))}
@@ -692,9 +737,9 @@ const FindingDrawer: React.FC<{ finding: Finding; onClose: () => void; onUpdated
 };
 
 const KV: React.FC<{ label: string; value: string; mono?: boolean }> = ({ label, value, mono }) => (
-  <div className="min-w-0">
-    <p className="eyebrow mb-0.5">{label}</p>
-    <p className={`wrap-any break-words text-[11px] text-muted ${mono ? 'font-mono' : ''}`}>{value}</p>
+  <div className="min-w-0 rounded-xl border border-line/60 bg-surface-2/40 p-2.5">
+    <p className="eyebrow mb-1 text-[9px] text-faint">{label}</p>
+    <p className={`wrap-any break-words text-[11.5px] leading-snug text-text/90 ${mono ? 'font-mono' : ''}`}>{value}</p>
   </div>
 );
 

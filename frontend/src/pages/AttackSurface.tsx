@@ -40,6 +40,19 @@ export const AttackSurface: React.FC = () => {
 
   const [selectedEndpoint, setSelectedEndpoint] = useState<SurfaceEndpoint | null>(null);
   const [selectedParameter, setSelectedParameter] = useState<SurfaceParameter | null>(null);
+  const [lastEndpoint, setLastEndpoint] = useState<SurfaceEndpoint | null>(null);
+  const [lastParameter, setLastParameter] = useState<SurfaceParameter | null>(null);
+
+  useEffect(() => {
+    if (selectedEndpoint) setLastEndpoint(selectedEndpoint);
+  }, [selectedEndpoint]);
+
+  useEffect(() => {
+    if (selectedParameter) setLastParameter(selectedParameter);
+  }, [selectedParameter]);
+
+  const activeEndpoint = selectedEndpoint || lastEndpoint;
+  const activeParameter = selectedParameter || lastParameter;
 
   const deepLinkRef = useRef<string | null>(searchParams.get('endpoint'));
 
@@ -506,69 +519,71 @@ export const AttackSurface: React.FC = () => {
         title={
           <span className="inline-flex items-center gap-2">
             Endpoint detail
-            <span className={`mono-cell rounded-full border px-2 py-0.5 text-[9px] ${selectedEndpoint ? borderTone(selectedEndpoint) : ''}`}>
-              {selectedEndpoint?.assessed ? 'assessed' : 'not assessed'}
+            <span className={`mono-cell rounded-full border px-2 py-0.5 text-[9px] ${activeEndpoint ? borderTone(activeEndpoint) : ''}`}>
+              {activeEndpoint?.assessed ? 'assessed' : 'not assessed'}
             </span>
           </span>
         }
         footer={
-          <>
-            <CopyButton value={selectedEndpoint?.url ?? ''} label="Copy URL" />
-            {selectedEndpoint && surface && (
-              <Link
-                to={`/surface?scan=${scanId}&endpoint=${encodeURIComponent(selectedEndpoint.url)}`}
-                className="rounded-full border border-line px-3.5 py-1.5 text-[11px] text-muted transition-colors duration-500 ease-spring hover:border-line-strong hover:text-text"
-              >
-                Deep link
-              </Link>
-            )}
-          </>
+          activeEndpoint ? (
+            <div className="flex w-full items-center justify-between gap-3">
+              <CopyButton value={activeEndpoint.url} label="Copy URL" />
+              {surface && (
+                <Link
+                  to={`/surface?scan=${scanId}&endpoint=${encodeURIComponent(activeEndpoint.url)}`}
+                  className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-[11px] font-medium text-muted transition-colors hover:border-line-strong hover:text-text"
+                >
+                  Deep link
+                </Link>
+              )}
+            </div>
+          ) : undefined
         }
       >
-        {selectedEndpoint && (
+        {activeEndpoint && (
           <div className="space-y-5">
             <div>
               <p className="eyebrow mb-1.5">URL</p>
-              <MonospaceValue value={selectedEndpoint.url} copyable className="text-[11.5px] text-text" />
+              <MonospaceValue value={activeEndpoint.url} copyable className="text-[11.5px] text-text" />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Scheme" value={selectedEndpoint.scheme} />
-              <Field label="Port" value={String(selectedEndpoint.port)} note={selectedEndpoint.scheme === 'https' ? 'scheme default' : 'explicit or default'} />
-              <Field label="Host" value={selectedEndpoint.host} />
-              <Field label="Parameters" value={String(selectedEndpoint.parameter_count)} />
+              <Field label="Scheme" value={activeEndpoint.scheme} />
+              <Field label="Port" value={String(activeEndpoint.port)} note={activeEndpoint.scheme === 'https' ? 'scheme default' : 'explicit or default'} />
+              <Field label="Host" value={activeEndpoint.host} />
+              <Field label="Parameters" value={String(activeEndpoint.parameter_count)} />
             </div>
 
             <div>
               <p className="eyebrow mb-2">Provenance</p>
               <div className="flex flex-wrap gap-1.5">
-                {selectedEndpoint.sources.map((s) => (
+                {activeEndpoint.sources.map((s) => (
                   <span key={s} className="mono-cell rounded-md border border-line px-2 py-1 text-[9.5px] text-muted">{s}</span>
                 ))}
               </div>
               <p className="mt-2 text-[10px] leading-relaxed text-faint">
-                First seen {relativeTime(selectedEndpoint.first_seen)} · Last seen{' '}
-                {relativeTime(selectedEndpoint.last_seen)}
+                First seen {relativeTime(activeEndpoint.first_seen)} · Last seen{' '}
+                {relativeTime(activeEndpoint.last_seen)}
               </p>
               <p className="mt-1 text-[10px] leading-relaxed text-faint">
                 Observation ids:{' '}
-                {selectedEndpoint.observation_ids.length > 0
-                  ? selectedEndpoint.observation_ids.map((id) => `#${id}`).join(', ')
+                {activeEndpoint.observation_ids.length > 0
+                  ? activeEndpoint.observation_ids.map((id) => `#${id}`).join(', ')
                   : '—'}
               </p>
             </div>
 
-            <div className={`rounded-xl border p-3.5 ${selectedEndpoint.assessed ? 'border-accent/25 bg-accent/[0.03]' : 'border-line bg-surface-2/60'}`}>
+            <div className={`rounded-xl border p-3.5 ${activeEndpoint.assessed ? 'border-accent/25 bg-accent/[0.03]' : 'border-line bg-surface-2/60'}`}>
               <p className="eyebrow mb-2">Assessment status</p>
-              {selectedEndpoint.assessed ? (
+              {activeEndpoint.assessed ? (
                 <>
                   <div className="flex flex-wrap gap-1.5">
-                    {selectedEndpoint.assessment_statuses.map((s) => (
+                    {activeEndpoint.assessment_statuses.map((s) => (
                       <AssessmentBadge key={s} status={s} />
                     ))}
                   </div>
                   <p className="mt-2 text-[10px] leading-relaxed text-faint">
-                    {selectedEndpoint.assessment_tests} executed/validated/failed test
-                    {selectedEndpoint.assessment_tests === 1 ? '' : 's'} reference this endpoint. Planned or
+                    {activeEndpoint.assessment_tests} executed/validated/failed test
+                    {activeEndpoint.assessment_tests === 1 ? '' : 's'} reference this endpoint. Planned or
                     skipped tests are never counted as assessment evidence.
                   </p>
                 </>
@@ -581,11 +596,11 @@ export const AttackSurface: React.FC = () => {
 
             <div>
               <p className="eyebrow mb-2">Observed parameters on this endpoint</p>
-              {parametersFor(selectedEndpoint.url).length === 0 ? (
+              {parametersFor(activeEndpoint.url).length === 0 ? (
                 <p className="text-[11px] text-faint">None observed.</p>
               ) : (
                 <div className="space-y-1.5">
-                  {parametersFor(selectedEndpoint.url).map((p) => (
+                  {parametersFor(activeEndpoint.url).map((p) => (
                     <button
                       key={`${p.endpoint}?${p.parameter}`}
                       type="button"
@@ -612,34 +627,34 @@ export const AttackSurface: React.FC = () => {
         onClose={() => setSelectedParameter(null)}
         title="Parameter detail"
         footer={
-          selectedParameter ? (
-            <CopyButton value={`${selectedParameter.endpoint}?${selectedParameter.parameter}`} label="Copy parameter ref" />
+          activeParameter ? (
+            <CopyButton value={`${activeParameter.endpoint}?${activeParameter.parameter}`} label="Copy parameter ref" />
           ) : undefined
         }
       >
-        {selectedParameter && (
+        {activeParameter && (
           <div className="space-y-5">
             <div>
               <p className="eyebrow mb-1.5">Endpoint</p>
-              <UrlValue url={selectedParameter.endpoint} className="text-[11.5px]" />
+              <UrlValue url={activeParameter.endpoint} className="text-[11.5px]" />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Parameter" value={selectedParameter.parameter} accent />
+              <Field label="Parameter" value={activeParameter.parameter} accent />
               <Field
                 label="Value shape"
-                value={selectedParameter.value_shape}
-                note={selectedParameter.value_shape === 'present' ? 'values are never surfaced' : 'observed empty'}
+                value={activeParameter.value_shape}
+                note={activeParameter.value_shape === 'present' ? 'values are never surfaced' : 'observed empty'}
               />
-              <Field label="Sensitive name" value={selectedParameter.value_sensitive ? 'hint' : 'no'} />
-              <Field label="Assessed" value={selectedParameter.assessed ? 'yes' : 'no'} />
+              <Field label="Sensitive name" value={activeParameter.value_sensitive ? 'hint' : 'no'} />
+              <Field label="Assessed" value={activeParameter.assessed ? 'yes' : 'no'} />
             </div>
             <div className="rounded-xl border border-line bg-surface-2/60 p-3.5">
               <p className="text-[10.5px] leading-relaxed text-muted">
                 Assessment status reflects the owning endpoint: only executed/validated/failed tests count.
               </p>
-              {selectedParameter.assessed && selectedParameter.assessment_statuses.length > 0 && (
+              {activeParameter.assessed && activeParameter.assessment_statuses.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {selectedParameter.assessment_statuses.map((s) => (
+                  {activeParameter.assessment_statuses.map((s) => (
                     <AssessmentBadge key={s} status={s} />
                   ))}
                 </div>
@@ -648,21 +663,21 @@ export const AttackSurface: React.FC = () => {
             <div>
               <p className="eyebrow mb-2">Provenance</p>
               <p className="text-[10px] leading-relaxed text-faint">
-                Sources: {selectedParameter.sources.length > 0 ? selectedParameter.sources.join(', ') : '—'}
+                Sources: {activeParameter.sources.length > 0 ? activeParameter.sources.join(', ') : '—'}
               </p>
               <p className="mt-1 text-[10px] leading-relaxed text-faint">
                 Observation ids:{' '}
-                {selectedParameter.observation_ids.length > 0
-                  ? selectedParameter.observation_ids.map((id) => `#${id}`).join(', ')
+                {activeParameter.observation_ids.length > 0
+                  ? activeParameter.observation_ids.map((id) => `#${id}`).join(', ')
                   : '—'}
               </p>
               <p className="mt-1 text-[10px] leading-relaxed text-faint">
-                First seen {relativeTime(selectedParameter.first_seen)} · Last seen{' '}
-                {relativeTime(selectedParameter.last_seen)}
+                First seen {relativeTime(activeParameter.first_seen)} · Last seen{' '}
+                {relativeTime(activeParameter.last_seen)}
               </p>
-              {selectedParameter.first_seen && (
+              {activeParameter.first_seen && (
                 <p className="mt-1 text-[10px] leading-relaxed text-faint">
-                  Exact observed {formatDateTime(selectedParameter.first_seen)}
+                  Exact observed {formatDateTime(activeParameter.first_seen)}
                 </p>
               )}
             </div>

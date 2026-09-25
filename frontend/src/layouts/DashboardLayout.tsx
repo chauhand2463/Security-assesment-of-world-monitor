@@ -123,7 +123,7 @@ export const DashboardLayout: React.FC<ShellProps> = ({ children, onLogout }) =>
   const initials = (user?.email || '?').split('@')[0].slice(0, 2).toUpperCase();
 
   const navBody = (
-    <div className="flex flex-1 flex-col overflow-y-auto px-3 py-4">
+    <div className="flex flex-1 flex-col overflow-y-auto scrollbar-thin px-3 py-4">
       <NavLink
         to="/scan/new"
         className="mb-5 flex items-center justify-center gap-2 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2.5 text-[12.5px] font-medium text-accent transition-colors duration-500 ease-spring hover:bg-accent/[0.14]"
@@ -213,14 +213,13 @@ export const DashboardLayout: React.FC<ShellProps> = ({ children, onLogout }) =>
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
-      style={{ willChange: 'opacity, transform' }}
     >
       {children}
     </motion.div>
   );
 
   return (
-    <div className="flex h-[100dvh] w-full flex-col overflow-hidden text-text">
+    <div className="flex h-[100dvh] w-full flex-col overflow-auto text-text">
       <header className="glass z-30 mx-2 mt-2 flex h-14 shrink-0 items-center gap-3 rounded-2xl px-3 sm:mx-3 sm:mt-3 sm:px-4">
         <button
           onClick={() => setMobileOpen((v) => !v)}
@@ -327,7 +326,7 @@ export const DashboardLayout: React.FC<ShellProps> = ({ children, onLogout }) =>
           )}
         </AnimatePresence>
 
-        <main id="main" ref={mainRef} tabIndex={-1} className="min-w-0 flex-1 overflow-y-auto">
+        <main id="main" ref={mainRef} tabIndex={-1} className="min-w-0 flex-1 overflow-y-auto scrollbar-thin">
           <div className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{pageTransition}</div>
         </main>
       </div>
